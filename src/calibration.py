@@ -11,10 +11,11 @@ class CalibrationModel:
     ever becomes available.
     """
 
-    def __init__(self, cx: float, cy: float, f: float):
+    def __init__(self, cx: float, cy: float, f: float, radius=None):
         self.cx = float(cx)
         self.cy = float(cy)
         self.f = float(f)
+        self.radius = radius
 
     def undistort_points(self, points):
         pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
@@ -59,16 +60,18 @@ class CalibrationModel:
                           borderMode=cv2.BORDER_CONSTANT)
 
     def to_dict(self):
-        return {"model": "equidistant_1param", "center": [self.cx, self.cy], "f": self.f}
+        return {"model": "equidistant_1param", "center": [self.cx, self.cy], "f": self.f, "radius": self.radius}
 
     @classmethod
     def from_dict(cls, d):
         cx, cy = d["center"]
-        return cls(cx, cy, d["f"])
+        return cls(cx, cy, d["f"], radius=d.get("radius"))
 
 
 def fit(clicked_points, cx, cy, f_min=50.0, f_max=1000.0, n_coarse=50):
     pts = np.asarray(clicked_points, dtype=np.float64).reshape(-1, 2)
+    if len(pts) < 3:
+        raise ValueError(f"fit() needs at least 3 clicked collinear points, got {len(pts)}")
 
     def residual(f):
         model = CalibrationModel(cx, cy, f)
@@ -80,6 +83,11 @@ def fit(clicked_points, cx, cy, f_min=50.0, f_max=1000.0, n_coarse=50):
     candidates = np.linspace(f_min, f_max, n_coarse)
     residuals = [residual(f) for f in candidates]
     best_idx = int(np.argmin(residuals))
+    if best_idx in (0, n_coarse - 1):
+        raise ValueError(
+            f"fit() optimum landed at the search boundary (f≈{candidates[best_idx]:.1f}); "
+            f"the clicked points may not be truly collinear, or f_min/f_max need widening"
+        )
     lo = candidates[max(best_idx - 1, 0)]
     hi = candidates[min(best_idx + 1, n_coarse - 1)]
 

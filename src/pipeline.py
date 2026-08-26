@@ -20,5 +20,6 @@ def run(config_path, raw_image_path, slot_id, candidate_point, output_path):
     composited_rectified = render_label(rectified, homography, candidate_point, config.label_spec)
     final = config.calibration.redistort_image(composited_rectified, output_shape=raw.shape[:2])
 
-    cv2.imwrite(output_path, final)
+    if not cv2.imwrite(output_path, final):
+        raise ValueError(f"could not write output image to {output_path}")
     return final

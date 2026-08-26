@@ -27,3 +27,4 @@ def test_slot_config_save_load_roundtrip(tmp_path):
     assert loaded.slots == slots
     assert loaded.label_spec == label_spec
     assert loaded.calibration.f == calibration.f
+    assert loaded.rectified_size == (640, 640)

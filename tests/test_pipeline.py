@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pytest
 
 from calibration import CalibrationModel
 from parking_slot import SlotConfig
@@ -36,7 +37,33 @@ def test_pipeline_composites_label_within_slot_bbox_only(tmp_path):
     bbox_after = final[y_min:y_max, x_min:x_max]
     assert not np.array_equal(bbox_before, bbox_after)
 
-    far_before = raw[320:360, 320:360]
-    far_after = final[320:360, 320:360]
-    # Allow small differences due to interpolation artifacts in undistort/redistort round-trip
-    np.testing.assert_allclose(far_before, far_after, atol=5)
+    baseline = calibration.redistort_image(
+        calibration.undistort_image(raw), output_shape=raw.shape[:2]
+    )
+    mask = np.ones(raw.shape[:2], dtype=bool)
+    mask[y_min:y_max, x_min:x_max] = False  # exclude the label's raw-space bbox
+    np.testing.assert_array_equal(final[mask], baseline[mask])
+
+
+def test_pipeline_raises_for_unknown_slot_id(tmp_path):
+    config_path, _, _ = _write_test_config(tmp_path)
+    output_path = str(tmp_path / "final.png")
+
+    with pytest.raises(ValueError):
+        run(config_path, SAMPLE_RAW_IMAGE, "slot-does-not-exist", (0.5, 0.5), output_path)
+
+
+def test_pipeline_raises_for_unreadable_raw_image(tmp_path):
+    config_path, _, _ = _write_test_config(tmp_path)
+    output_path = str(tmp_path / "final.png")
+
+    with pytest.raises(ValueError):
+        run(config_path, str(tmp_path / "does_not_exist.jpg"), "slot-A", (0.5, 0.5), output_path)
+
+
+def test_pipeline_raises_when_candidate_maps_outside_rectified_bounds(tmp_path):
+    config_path, _, _ = _write_test_config(tmp_path)
+    output_path = str(tmp_path / "final.png")
+
+    with pytest.raises(ValueError):
+        run(config_path, SAMPLE_RAW_IMAGE, "slot-A", (5.0, 5.0), output_path)

@@ -27,3 +27,12 @@ def test_render_label_rejects_unsupported_shape():
 
     with pytest.raises(NotImplementedError):
         render_label(canvas, homography, (0.5, 0.5), label_spec)
+
+
+def test_render_label_raises_when_candidate_outside_rectified_bounds():
+    canvas = _blank_canvas()
+    homography = plane_to_pixel_homography([[100.0, 100.0], [300.0, 100.0], [300.0, 300.0], [100.0, 300.0]])
+    label_spec = {"shape": "rect", "width": 0.4, "height": 0.4, "color": [0, 0, 255], "alpha": 1.0, "text": None}
+
+    with pytest.raises(ValueError):
+        render_label(canvas, homography, (5.0, 5.0), label_spec)

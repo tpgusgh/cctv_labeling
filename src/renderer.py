@@ -28,6 +28,15 @@ def render_label(rectified_image, homography, candidate_point, label_spec):
 
     corners_norm = _label_corners_normalized(candidate_point, width, height)
     corners_px = plane_points_to_pixel(homography, corners_norm)
+
+    h, w = rectified_image.shape[:2]
+    if (corners_px[:, 0] < 0).any() or (corners_px[:, 0] >= w).any() \
+            or (corners_px[:, 1] < 0).any() or (corners_px[:, 1] >= h).any():
+        raise ValueError(
+            f"label at candidate {tuple(candidate_point)} maps to rectified pixels "
+            f"{corners_px.tolist()}, outside the {w}x{h} rectified image"
+        )
+
     poly = corners_px.reshape(-1, 1, 2).astype(np.int32)
 
     overlay = rectified_image.copy()
