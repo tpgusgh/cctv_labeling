@@ -161,9 +161,12 @@ class LocalView:
         rotation = _rotation_aligning_to_z(ray)
         return cls(calibration, rotation, local_f, patch_size)
 
-    def raw_to_local(self, raw_points):
+    def _local_rays(self, raw_points):
         rays = self.calibration.pixel_to_ray(raw_points)
-        local_rays = rays @ self.rotation.T
+        return rays @ self.rotation.T
+
+    def raw_to_local(self, raw_points):
+        local_rays = self._local_rays(raw_points)
         w, h = self.patch_size
         lx = self.local_f * local_rays[:, 0] / local_rays[:, 2] + w / 2.0
         ly = self.local_f * local_rays[:, 1] / local_rays[:, 2] + h / 2.0
@@ -192,12 +195,19 @@ class LocalView:
 
     def unrectify_into(self, local_patch, raw_image):
         w, h = self.patch_size
-        corners_local = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float64)
-        corners_raw = self.local_to_raw(corners_local)
-        x_min = max(int(np.floor(corners_raw[:, 0].min())), 0)
-        x_max = min(int(np.ceil(corners_raw[:, 0].max())) + 1, raw_image.shape[1])
-        y_min = max(int(np.floor(corners_raw[:, 1].min())), 0)
-        y_max = min(int(np.ceil(corners_raw[:, 1].max())) + 1, raw_image.shape[0])
+
+        n = 150
+        top = np.stack([np.linspace(0, w - 1, n), np.zeros(n)], axis=1)
+        bottom = np.stack([np.linspace(0, w - 1, n), np.full(n, h - 1)], axis=1)
+        left = np.stack([np.zeros(n), np.linspace(0, h - 1, n)], axis=1)
+        right = np.stack([np.full(n, w - 1), np.linspace(0, h - 1, n)], axis=1)
+        boundary_local = np.concatenate([top, bottom, left, right], axis=0)
+        boundary_raw = self.local_to_raw(boundary_local)
+
+        x_min = max(int(np.floor(boundary_raw[:, 0].min())), 0)
+        x_max = min(int(np.ceil(boundary_raw[:, 0].max())) + 1, raw_image.shape[1])
+        y_min = max(int(np.floor(boundary_raw[:, 1].min())), 0)
+        y_max = min(int(np.ceil(boundary_raw[:, 1].max())) + 1, raw_image.shape[0])
 
         result = raw_image.copy()
         if x_max <= x_min or y_max <= y_min:
@@ -205,20 +215,20 @@ class LocalView:
 
         grid_x, grid_y = np.meshgrid(np.arange(x_min, x_max), np.arange(y_min, y_max))
         raw_coords = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1).astype(np.float64)
-        local_sample_coords = self.raw_to_local(raw_coords)
 
-        valid = (
-            (local_sample_coords[:, 0] >= 0) & (local_sample_coords[:, 0] < w) &
-            (local_sample_coords[:, 1] >= 0) & (local_sample_coords[:, 1] < h)
-        )
+        local_rays = self._local_rays(raw_coords)
+        forward = local_rays[:, 2] > 0
+        safe_z = np.where(forward, local_rays[:, 2], 1.0)
+        lx = self.local_f * local_rays[:, 0] / safe_z + w / 2.0
+        ly = self.local_f * local_rays[:, 1] / safe_z + h / 2.0
 
-        map_x = local_sample_coords[:, 0].reshape(y_max - y_min, x_max - x_min).astype(np.float32)
-        map_y = local_sample_coords[:, 1].reshape(y_max - y_min, x_max - x_min).astype(np.float32)
+        valid = forward & (lx >= 0) & (lx <= w - 1) & (ly >= 0) & (ly <= h - 1)
+
+        map_x = lx.reshape(y_max - y_min, x_max - x_min).astype(np.float32)
+        map_y = ly.reshape(y_max - y_min, x_max - x_min).astype(np.float32)
         patch_region = cv2.remap(local_patch, map_x, map_y, interpolation=cv2.INTER_LINEAR,
                                   borderMode=cv2.BORDER_CONSTANT)
 
         valid_mask = valid.reshape(y_max - y_min, x_max - x_min)
-        region = result[y_min:y_max, x_min:x_max].copy()
-        region[valid_mask] = patch_region[valid_mask]
-        result[y_min:y_max, x_min:x_max] = region
+        result[y_min:y_max, x_min:x_max][valid_mask] = patch_region[valid_mask]
         return result

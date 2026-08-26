@@ -187,3 +187,30 @@ def test_local_view_roundtrip_preserves_peripheral_content():
     far_raw = raw[550:580, 550:580]
     far_roundtripped = roundtripped[550:580, 550:580]
     np.testing.assert_array_equal(far_raw, far_roundtripped)
+
+
+def test_unrectify_into_covers_full_curved_footprint_at_nadir():
+    from calibration import LocalView
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    raw = np.zeros((640, 640, 3), dtype=np.uint8)  # synthetic, content doesn't matter here
+    view = LocalView.centered_on(calibration, (320.0, 320.0), patch_size=(300, 300), local_f=300.0)
+
+    solid_patch = np.full((300, 300, 3), 200, dtype=np.uint8)
+    result = view.unrectify_into(solid_patch, raw)
+
+    # Determine the TRUE footprint by sampling raw_to_local over a dense raw-space grid
+    # around the nadir and checking which raw pixels land inside the patch (this is an
+    # independent ground-truth check, not reusing unrectify_into's own bbox logic).
+    ys, xs = np.mgrid[170:470, 170:470]
+    raw_grid = np.stack([xs.ravel(), ys.ravel()], axis=1).astype(np.float64)
+    local_rays = view._local_rays(raw_grid)
+    forward = local_rays[:, 2] > 0
+    safe_z = np.where(forward, local_rays[:, 2], 1.0)
+    lx = view.local_f * local_rays[:, 0] / safe_z + 150.0
+    ly = view.local_f * local_rays[:, 1] / safe_z + 150.0
+    true_footprint = forward & (lx >= 0) & (lx <= 299) & (ly >= 0) & (ly <= 299)
+
+    painted = np.all(result[ys.ravel(), xs.ravel()] == 200, axis=1)
+    coverage = painted[true_footprint].mean()
+    assert coverage > 0.99, f"only {coverage:.2%} of the true footprint got painted"

@@ -26,10 +26,22 @@ def run(config_path, raw_image_path, slot_id, candidate_point, output_path):
         raise ValueError(f"could not read image at {raw_image_path}")
 
     center_raw = _polygon_centroid(slot["polygon_raw"])
+    if not np.all(np.isfinite(center_raw)):
+        raise ValueError(f"slot '{slot_id}' has a degenerate polygon_raw (empty or non-finite): {slot['polygon_raw']}")
+
     view = LocalView.centered_on(config.calibration, center_raw, DEFAULT_PATCH_SIZE, DEFAULT_LOCAL_F)
 
-    local_patch = view.rectify(raw)
+    corner_rays = view._local_rays(slot["polygon_raw"])
+    patch_w, patch_h = DEFAULT_PATCH_SIZE
+    if not np.all(corner_rays[:, 2] > 0):
+        raise ValueError(f"slot '{slot_id}' has a polygon_raw corner behind the local view (camera cannot represent it)")
+
     polygon_local = view.raw_to_local(slot["polygon_raw"])
+    if not (np.all(polygon_local[:, 0] >= 0) and np.all(polygon_local[:, 0] <= patch_w - 1)
+            and np.all(polygon_local[:, 1] >= 0) and np.all(polygon_local[:, 1] <= patch_h - 1)):
+        raise ValueError(f"slot '{slot_id}' polygon_raw falls outside the local patch bounds for the current DEFAULT_PATCH_SIZE/DEFAULT_LOCAL_F")
+
+    local_patch = view.rectify(raw)
     homography = plane_to_pixel_homography(polygon_local)
     composited_local = render_label(local_patch, homography, candidate_point, config.label_spec)
     final = view.unrectify_into(composited_local, raw)
