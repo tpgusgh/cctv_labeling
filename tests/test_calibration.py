@@ -1,6 +1,9 @@
 import json
 import numpy as np
+import cv2
 from calibration import CalibrationModel, fit
+
+SAMPLE_RAW_IMAGE = "no_label/P1_B1_1_1/20260820_030004.jpg"
 
 
 def test_undistort_distort_roundtrip():
@@ -34,3 +37,19 @@ def test_to_dict_from_dict_roundtrip(tmp_path):
     assert loaded.cx == model.cx
     assert loaded.cy == model.cy
     assert loaded.f == model.f
+
+
+def test_undistort_redistort_image_roundtrip():
+    raw = cv2.imread(SAMPLE_RAW_IMAGE)
+    assert raw is not None, f"sample image not found at {SAMPLE_RAW_IMAGE}"
+    model = CalibrationModel(cx=320.0, cy=320.0, f=300.0)
+
+    rectified = model.undistort_image(raw)
+    assert rectified.shape == raw.shape
+    assert not np.array_equal(rectified, raw)
+
+    redistorted = model.redistort_image(rectified, output_shape=raw.shape[:2])
+    assert redistorted.shape == raw.shape
+
+    mean_abs_diff = np.mean(np.abs(redistorted.astype(np.int16) - raw.astype(np.int16)))
+    assert mean_abs_diff < 60.0
