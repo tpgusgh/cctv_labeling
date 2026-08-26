@@ -140,12 +140,30 @@ def test_run_auto_all_labels_visible_slots_and_skips_empty_ones(tmp_path):
 
     results = run_auto_all(config_path, CAR_SAMPLE_IMAGE, str(output_path))
 
-    assert results == {"car-slot": "labeled", "empty-slot": "skipped"}
+    assert results["car-slot"].startswith("labeled")
+    assert results["empty-slot"] == "skipped"
     assert output_path.exists()
 
     final = cv2.imread(str(output_path))
     assert final.shape == raw.shape
     assert not np.array_equal(final, raw)
+
+
+def test_run_auto_all_flags_low_confidence_blob_for_review(tmp_path):
+    # bbox (553,406,17,36), aspect ratio ~2.12 -- passes MAX_ASPECT_RATIO (2.5)
+    # so it isn't filtered out entirely, but is elongated enough to score below
+    # REVIEW_CONFIDENCE_THRESHOLD (measured confidence ~0.25).
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
+    slots = [{"id": "elongated-slot", "polygon_raw": [[513.0, 366.0], [610.0, 366.0], [610.0, 482.0], [513.0, 482.0]]}]
+    label_spec = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
+    config = SlotConfig("P1_B1_1_21", 640, 640, calibration, slots, label_spec)
+    config_path = tmp_path / "config.json"
+    config.save(str(config_path))
+    output_path = tmp_path / "final.png"
+
+    results = run_auto_all(str(config_path), CAR_SAMPLE_IMAGE, str(output_path))
+
+    assert results["elongated-slot"].startswith("review")
 
 
 def test_run_auto_all_records_error_without_aborting_other_slots(tmp_path):
@@ -167,6 +185,6 @@ def test_run_auto_all_records_error_without_aborting_other_slots(tmp_path):
 
     results = run_auto_all(str(config_path), CAR_SAMPLE_IMAGE, str(output_path))
 
-    assert results["car-slot"] == "labeled"
+    assert results["car-slot"].startswith("labeled")
     assert results["bad-slot"].startswith("error:")
     assert output_path.exists()

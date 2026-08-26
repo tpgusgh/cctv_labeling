@@ -6,7 +6,7 @@ from candidate import compute_label_candidate, find_slot_windshield
 from parking_slot import SlotConfig
 from perspective import plane_to_pixel_homography
 from renderer import render_label
-from windshield import detect_windshields
+from windshield import detect_windshields, confidence_score, REVIEW_CONFIDENCE_THRESHOLD
 
 DEFAULT_PATCH_SIZE = (300, 300)
 DEFAULT_LOCAL_F = 300.0
@@ -93,7 +93,9 @@ def run_auto_all(config_path, raw_image_path, output_path):
             local_patch = view.rectify(result_image)
             composited_local = render_label(local_patch, homography, candidate_point, label_spec)
             result_image = view.unrectify_into(composited_local, result_image)
-            results[slot_id] = "labeled"
+            score = confidence_score(blob)
+            status = "labeled" if score >= REVIEW_CONFIDENCE_THRESHOLD else "review"
+            results[slot_id] = f"{status} (confidence={score:.2f})"
         except (ValueError, cv2.error) as e:
             results[slot_id] = f"error: {e}"
 
