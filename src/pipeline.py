@@ -2,14 +2,22 @@ import cv2
 import numpy as np
 
 from calibration import LocalView
-from candidate import compute_label_candidate, find_slot_windshield
 from parking_slot import SlotConfig
 from perspective import plane_to_pixel_homography
 from renderer import render_label
-from windshield import detect_windshields, confidence_score, REVIEW_CONFIDENCE_THRESHOLD
 
 DEFAULT_PATCH_SIZE = (300, 300)
 DEFAULT_LOCAL_F = 300.0
+
+# ponytail: label position/size is a fixed rule, not a real per-image
+# windshield detection -- "차가 있다고 상상하고 그리라는거야", "차 없을때 주차장
+# 차 선에 배치해야지" (imagine a car parked there; with no car, place it from
+# the slot's own lines). Centered + a bit over half the slot in each
+# dimension stays inside the slot's boundary lines and covers a plausible
+# windshield zone regardless of which way a car would face.
+FIXED_CANDIDATE_POINT = (0.5, 0.5)
+FIXED_LABEL_WIDTH = 0.68
+FIXED_LABEL_HEIGHT = 0.68
 
 
 def _polygon_centroid(polygon):
@@ -71,31 +79,19 @@ def run_auto_all(config_path, raw_image_path, output_path):
     if raw is None:
         raise ValueError(f"could not read image at {raw_image_path}")
 
-    # Detect once on the pristine raw frame, not the progressively-labeled
-    # result image -- a drawn label could otherwise split/alter blobs for
-    # slots processed later in the loop.
-    blobs = detect_windshields(raw, config.calibration)
-
     result_image = raw
     results = {}
     for slot in config.slots:
         slot_id = slot["id"]
         try:
-            blob = find_slot_windshield(slot["polygon_raw"], blobs)
-            if blob is None:
-                results[slot_id] = "skipped"
-                continue
             view, homography = _prepare_slot_view(config, slot, slot_id)
-            candidate_point, width, height = compute_label_candidate(view, homography, blob)
             label_spec = dict(config.label_spec)
-            label_spec["width"] = width
-            label_spec["height"] = height
+            label_spec.setdefault("width", FIXED_LABEL_WIDTH)
+            label_spec.setdefault("height", FIXED_LABEL_HEIGHT)
             local_patch = view.rectify(result_image)
-            composited_local = render_label(local_patch, homography, candidate_point, label_spec)
+            composited_local = render_label(local_patch, homography, FIXED_CANDIDATE_POINT, label_spec)
             result_image = view.unrectify_into(composited_local, result_image)
-            score = confidence_score(blob)
-            status = "labeled" if score >= REVIEW_CONFIDENCE_THRESHOLD else "review"
-            results[slot_id] = f"{status} (confidence={score:.2f})"
+            results[slot_id] = "labeled"
         except (ValueError, cv2.error) as e:
             results[slot_id] = f"error: {e}"
 
@@ -114,19 +110,12 @@ def run_auto(config_path, raw_image_path, slot_id, output_path):
 
     view, homography = _prepare_slot_view(config, slot, slot_id)
 
-    blobs = detect_windshields(raw, config.calibration)
-    blob = find_slot_windshield(slot["polygon_raw"], blobs)
-    if blob is None:
-        return None
-
-    candidate_point, width, height = compute_label_candidate(view, homography, blob)
-
     label_spec = dict(config.label_spec)
-    label_spec["width"] = width
-    label_spec["height"] = height
+    label_spec.setdefault("width", FIXED_LABEL_WIDTH)
+    label_spec.setdefault("height", FIXED_LABEL_HEIGHT)
 
     local_patch = view.rectify(raw)
-    composited_local = render_label(local_patch, homography, candidate_point, label_spec)
+    composited_local = render_label(local_patch, homography, FIXED_CANDIDATE_POINT, label_spec)
     final = view.unrectify_into(composited_local, raw)
 
     if not cv2.imwrite(output_path, final):

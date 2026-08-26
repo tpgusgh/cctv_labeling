@@ -13,9 +13,9 @@ def build_parser():
     parser.add_argument("--candidate-v", type=float, help="candidate label center, normalized 0-1 (ignored with --auto/--auto-all)")
     parser.add_argument("--output", required=True, help="path to write the final PNG")
     parser.add_argument("--auto", action="store_true",
-                         help="auto-detect the windshield and compute label position/size instead of using --candidate-u/-v (single slot, requires --slot-id)")
+                         help="place the label at the slot's fixed center position/size instead of using --candidate-u/-v (single slot, requires --slot-id)")
     parser.add_argument("--auto-all", action="store_true",
-                         help="auto-detect and label every slot in the config that has a visible windshield, in one output image (no --slot-id needed)")
+                         help="place a label in every slot in the config, in one output image (no --slot-id needed)")
     return parser
 
 
@@ -32,9 +32,7 @@ def main(argv=None):
         raise SystemExit("--slot-id is required unless --auto-all is set")
 
     if args.auto:
-        result = run_auto(args.config, args.image, args.slot_id, args.output)
-        if result is None:
-            print(f"slot '{args.slot_id}': no visible windshield, skipped (no output written)")
+        run_auto(args.config, args.image, args.slot_id, args.output)
         return
 
     if args.candidate_u is None or args.candidate_v is None:

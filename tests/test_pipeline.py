@@ -93,7 +93,7 @@ def _write_auto_test_config(tmp_path, polygon_raw):
     return str(path)
 
 
-def test_run_auto_labels_slot_with_visible_windshield(tmp_path):
+def test_run_auto_labels_slot_with_car(tmp_path):
     config_path = _write_auto_test_config(tmp_path, CAR_SLOT_POLYGON_RAW)
     output_path = tmp_path / "final.png"
 
@@ -108,14 +108,16 @@ def test_run_auto_labels_slot_with_visible_windshield(tmp_path):
     assert output_path.exists()
 
 
-def test_run_auto_skips_slot_with_no_visible_windshield(tmp_path):
+def test_run_auto_labels_empty_slot_too(tmp_path):
+    # label placement is a fixed rule driven by the slot's own geometry, not
+    # real car/windshield detection -- an empty slot still gets labeled.
     config_path = _write_auto_test_config(tmp_path, EMPTY_SLOT_POLYGON_RAW)
     output_path = tmp_path / "final.png"
 
     result = run_auto(config_path, CAR_SAMPLE_IMAGE, "slot-A", str(output_path))
 
-    assert result is None
-    assert not output_path.exists()
+    assert result is not None
+    assert output_path.exists()
 
 
 def _write_multi_slot_config(tmp_path):
@@ -131,7 +133,7 @@ def _write_multi_slot_config(tmp_path):
     return str(path)
 
 
-def test_run_auto_all_labels_visible_slots_and_skips_empty_ones(tmp_path):
+def test_run_auto_all_labels_every_slot(tmp_path):
     config_path = _write_multi_slot_config(tmp_path)
     output_path = tmp_path / "final.png"
 
@@ -140,8 +142,8 @@ def test_run_auto_all_labels_visible_slots_and_skips_empty_ones(tmp_path):
 
     results = run_auto_all(config_path, CAR_SAMPLE_IMAGE, str(output_path))
 
-    assert results["car-slot"].startswith("labeled")
-    assert results["empty-slot"] == "skipped"
+    assert results["car-slot"] == "labeled"
+    assert results["empty-slot"] == "labeled"
     assert output_path.exists()
 
     final = cv2.imread(str(output_path))
@@ -149,31 +151,12 @@ def test_run_auto_all_labels_visible_slots_and_skips_empty_ones(tmp_path):
     assert not np.array_equal(final, raw)
 
 
-def test_run_auto_all_flags_low_confidence_blob_for_review(tmp_path):
-    # bbox (553,406,17,36), aspect ratio ~2.12 -- passes MAX_ASPECT_RATIO (2.5)
-    # so it isn't filtered out entirely, but is elongated enough to score below
-    # REVIEW_CONFIDENCE_THRESHOLD (measured confidence ~0.25).
-    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
-    slots = [{"id": "elongated-slot", "polygon_raw": [[513.0, 366.0], [610.0, 366.0], [610.0, 482.0], [513.0, 482.0]]}]
-    label_spec = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
-    config = SlotConfig("P1_B1_1_21", 640, 640, calibration, slots, label_spec)
-    config_path = tmp_path / "config.json"
-    config.save(str(config_path))
-    output_path = tmp_path / "final.png"
-
-    results = run_auto_all(str(config_path), CAR_SAMPLE_IMAGE, str(output_path))
-
-    assert results["elongated-slot"].startswith("review")
-
-
 def test_run_auto_all_records_error_without_aborting_other_slots(tmp_path):
     calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
     slots = [
-        # this oversized polygon still contains the real blob's centroid (so
-        # find_slot_windshield assigns it a blob and proceeds past the skip
-        # check), but it's too large to fit the fixed local patch, so
-        # _prepare_slot_view raises ValueError for this slot specifically
-        # (see CAR_SLOT_POLYGON_RAW comment above for the original measurement).
+        # too large to fit the fixed local patch, so _prepare_slot_view
+        # raises ValueError for this slot specifically (see CAR_SLOT_POLYGON_RAW
+        # comment above for the original measurement).
         {"id": "bad-slot", "polygon_raw": [[200.0, 260.0], [460.0, 260.0], [460.0, 500.0], [200.0, 500.0]]},
         {"id": "car-slot", "polygon_raw": CAR_SLOT_POLYGON_RAW},
     ]

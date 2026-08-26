@@ -49,7 +49,7 @@ def test_cli_auto_flag_writes_output_for_visible_windshield(tmp_path):
     assert output_path.exists()
 
 
-def test_cli_auto_flag_skips_without_writing_when_no_windshield(tmp_path):
+def test_cli_auto_flag_labels_even_an_empty_slot(tmp_path):
     calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
     slots = [{"id": "slot-A", "polygon_raw": [[280.0, 20.0], [360.0, 20.0], [360.0, 100.0], [280.0, 100.0]]}]
     label_spec = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
@@ -65,7 +65,7 @@ def test_cli_auto_flag_skips_without_writing_when_no_windshield(tmp_path):
         "--output", str(output_path),
     ])
 
-    assert not output_path.exists()
+    assert output_path.exists()
 
 
 def test_cli_auto_all_flag_labels_multiple_slots_without_slot_id(tmp_path):
