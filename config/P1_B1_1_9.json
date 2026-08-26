@@ -6,5 +6,5 @@
   "slots": [
     { "id": "A", "polygon_raw": [[280.0, 20.0], [360.0, 20.0], [360.0, 100.0], [280.0, 100.0]] }
   ],
-  "label_spec": { "shape": "rect", "width": 0.6, "height": 0.6, "color": [0, 200, 90], "alpha": 0.75, "text": null }
+  "label_spec": { "shape": "rect", "width": 0.6, "height": 0.6, "color": [235, 206, 135], "alpha": 1.0, "text": null, "border_width": 3 }
 }
