@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 
 from calibration import CalibrationModel
-from windshield import detect_windshields
+from windshield import detect_windshields, confidence_score, WindshieldBlob
 
 CAR_SAMPLE_IMAGE = "no_label/P1_B1_1_21/20260820_115029.jpg"
 
@@ -43,3 +43,12 @@ def test_detect_windshields_rejects_elongated_reflection_streaks():
     centroids = [b.centroid for b in blobs]
     assert any(200 < cx < 240 and 200 < cy < 235 for cx, cy in centroids)
     assert not any(300 < cx < 310 and 300 < cy < 450 for cx, cy in centroids)
+
+
+def test_confidence_score_favors_compact_shapes_over_elongated_ones():
+    compact = WindshieldBlob(contour=None, bbox=(0, 0, 62, 70), centroid=(31, 35), area=1624)  # aspect ~1.13
+    elongated = WindshieldBlob(contour=None, bbox=(0, 0, 17, 36), centroid=(8, 18), area=379)   # aspect ~2.12
+
+    assert confidence_score(compact) > confidence_score(elongated)
+    assert 0.0 <= confidence_score(elongated) <= 1.0
+    assert 0.0 <= confidence_score(compact) <= 1.0

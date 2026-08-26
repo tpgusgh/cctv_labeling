@@ -18,6 +18,24 @@ MIN_BLOB_AREA = 150
 MAX_BLOB_AREA = 8000
 MAX_ASPECT_RATIO = 2.5
 
+# ponytail: no labeled dataset exists to train a real label/no_label classifier
+# (see docs/superpowers/specs/2026-08-26-windshield-label-placement-design.md's
+# background on why the original "차량 detection" plan was abandoned -- same
+# reason applies here). This is a simple heuristic confidence in [0,1] based on
+# how compact the blob's shape is (real windshields measured compact, aspect
+# ratio ~1.1-1.3; elongated blobs are more likely reflections/shadows/clutter
+# that survived the MAX_ASPECT_RATIO filter but are still borderline). Blob
+# *area* is deliberately NOT part of this score -- apparent windshield size
+# varies hugely with where the car sits in this fisheye frame, so a "closer to
+# the middle of the valid area range is better" assumption would be wrong.
+REVIEW_CONFIDENCE_THRESHOLD = 0.5
+
+
+def confidence_score(blob):
+    x, y, w, h = blob.bbox
+    aspect_ratio = max(w, h) / max(min(w, h), 1)
+    return max(0.0, 1.0 - (aspect_ratio - 1.0) / (MAX_ASPECT_RATIO - 1.0))
+
 
 @dataclass
 class WindshieldBlob:
