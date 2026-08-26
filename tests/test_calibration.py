@@ -51,5 +51,18 @@ def test_undistort_redistort_image_roundtrip():
     redistorted = model.redistort_image(rectified, output_shape=raw.shape[:2])
     assert redistorted.shape == raw.shape
 
-    mean_abs_diff = np.mean(np.abs(redistorted.astype(np.int16) - raw.astype(np.int16)))
-    assert mean_abs_diff < 60.0
+    # The equidistant->tan(theta) undistort model has a finite valid raw-space
+    # radius beyond which cv2.remap samples fall outside the same-size
+    # rectified canvas and get BORDER_CONSTANT zero-filled (not a round-trip
+    # error — a real limitation of this MVP model). Compare only within a safe
+    # interior radius, well under the measured ~245px axis-aligned boundary for
+    # these parameters.
+    h, w = raw.shape[:2]
+    yy, xx = np.mgrid[0:h, 0:w]
+    safe_radius = 200.0
+    mask = (xx - 320.0) ** 2 + (yy - 320.0) ** 2 < safe_radius ** 2
+
+    mean_abs_diff = np.mean(np.abs(
+        redistorted[mask].astype(np.int16) - raw[mask].astype(np.int16)
+    ))
+    assert mean_abs_diff < 5.0
