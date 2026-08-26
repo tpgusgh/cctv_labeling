@@ -59,6 +59,29 @@ class CalibrationModel:
         return cv2.remap(rectified_bgr, map_x, map_y, interpolation=cv2.INTER_LINEAR,
                           borderMode=cv2.BORDER_CONSTANT)
 
+    def pixel_to_ray(self, points):
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        dx = pts[:, 0] - self.cx
+        dy = pts[:, 1] - self.cy
+        r = np.sqrt(dx ** 2 + dy ** 2)
+        theta = r / self.f
+        phi = np.arctan2(dy, dx)
+        x = np.sin(theta) * np.cos(phi)
+        y = np.sin(theta) * np.sin(phi)
+        z = np.cos(theta)
+        return np.stack([x, y, z], axis=1)
+
+    def ray_to_pixel(self, rays):
+        rays = np.asarray(rays, dtype=np.float64).reshape(-1, 3)
+        norms = np.linalg.norm(rays, axis=1, keepdims=True)
+        rays = rays / norms
+        theta = np.arccos(np.clip(rays[:, 2], -1.0, 1.0))
+        phi = np.arctan2(rays[:, 1], rays[:, 0])
+        r = self.f * theta
+        dx = r * np.cos(phi)
+        dy = r * np.sin(phi)
+        return np.stack([self.cx + dx, self.cy + dy], axis=1)
+
     def to_dict(self):
         return {"model": "equidistant_1param", "center": [self.cx, self.cy], "f": self.f, "radius": self.radius}
 
@@ -100,3 +123,112 @@ def fit(clicked_points, cx, cy, f_min=50.0, f_max=1000.0, n_coarse=50):
             lo = m1
 
     return CalibrationModel(cx, cy, (lo + hi) / 2)
+
+
+def _rotation_aligning_to_z(v):
+    v = np.asarray(v, dtype=np.float64)
+    v = v / np.linalg.norm(v)
+    z = np.array([0.0, 0.0, 1.0])
+    c = np.dot(v, z)
+
+    if c > 1.0 - 1e-9:
+        return np.eye(3)
+    if c < -1.0 + 1e-9:
+        axis = np.array([1.0, 0.0, 0.0])
+        return 2 * np.outer(axis, axis) - np.eye(3)
+
+    axis = np.cross(v, z)
+    s = np.linalg.norm(axis)
+    axis = axis / s
+    K = np.array([
+        [0.0, -axis[2], axis[1]],
+        [axis[2], 0.0, -axis[0]],
+        [-axis[1], axis[0], 0.0],
+    ])
+    return np.eye(3) + K * s + (K @ K) * (1 - c)
+
+
+class LocalView:
+    def __init__(self, calibration, rotation, local_f, patch_size):
+        self.calibration = calibration
+        self.rotation = rotation
+        self.local_f = local_f
+        self.patch_size = patch_size
+
+    @classmethod
+    def centered_on(cls, calibration, center_raw_point, patch_size, local_f):
+        ray = calibration.pixel_to_ray([center_raw_point])[0]
+        rotation = _rotation_aligning_to_z(ray)
+        return cls(calibration, rotation, local_f, patch_size)
+
+    def _local_rays(self, raw_points):
+        rays = self.calibration.pixel_to_ray(raw_points)
+        return rays @ self.rotation.T
+
+    def raw_to_local(self, raw_points):
+        local_rays = self._local_rays(raw_points)
+        w, h = self.patch_size
+        lx = self.local_f * local_rays[:, 0] / local_rays[:, 2] + w / 2.0
+        ly = self.local_f * local_rays[:, 1] / local_rays[:, 2] + h / 2.0
+        return np.stack([lx, ly], axis=1)
+
+    def local_to_raw(self, local_points):
+        pts = np.asarray(local_points, dtype=np.float64).reshape(-1, 2)
+        w, h = self.patch_size
+        x = (pts[:, 0] - w / 2.0) / self.local_f
+        y = (pts[:, 1] - h / 2.0) / self.local_f
+        z = np.ones_like(x)
+        local_rays = np.stack([x, y, z], axis=1)
+        local_rays = local_rays / np.linalg.norm(local_rays, axis=1, keepdims=True)
+        world_rays = local_rays @ self.rotation
+        return self.calibration.ray_to_pixel(world_rays)
+
+    def rectify(self, raw_image):
+        w, h = self.patch_size
+        grid_x, grid_y = np.meshgrid(np.arange(w), np.arange(h))
+        local_coords = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1).astype(np.float64)
+        raw_sample_coords = self.local_to_raw(local_coords)
+        map_x = raw_sample_coords[:, 0].reshape(h, w).astype(np.float32)
+        map_y = raw_sample_coords[:, 1].reshape(h, w).astype(np.float32)
+        return cv2.remap(raw_image, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT)
+
+    def unrectify_into(self, local_patch, raw_image):
+        w, h = self.patch_size
+
+        n = 150
+        top = np.stack([np.linspace(0, w - 1, n), np.zeros(n)], axis=1)
+        bottom = np.stack([np.linspace(0, w - 1, n), np.full(n, h - 1)], axis=1)
+        left = np.stack([np.zeros(n), np.linspace(0, h - 1, n)], axis=1)
+        right = np.stack([np.full(n, w - 1), np.linspace(0, h - 1, n)], axis=1)
+        boundary_local = np.concatenate([top, bottom, left, right], axis=0)
+        boundary_raw = self.local_to_raw(boundary_local)
+
+        x_min = max(int(np.floor(boundary_raw[:, 0].min())), 0)
+        x_max = min(int(np.ceil(boundary_raw[:, 0].max())) + 1, raw_image.shape[1])
+        y_min = max(int(np.floor(boundary_raw[:, 1].min())), 0)
+        y_max = min(int(np.ceil(boundary_raw[:, 1].max())) + 1, raw_image.shape[0])
+
+        result = raw_image.copy()
+        if x_max <= x_min or y_max <= y_min:
+            return result
+
+        grid_x, grid_y = np.meshgrid(np.arange(x_min, x_max), np.arange(y_min, y_max))
+        raw_coords = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1).astype(np.float64)
+
+        local_rays = self._local_rays(raw_coords)
+        forward = local_rays[:, 2] > 0
+        safe_z = np.where(forward, local_rays[:, 2], 1.0)
+        lx = self.local_f * local_rays[:, 0] / safe_z + w / 2.0
+        ly = self.local_f * local_rays[:, 1] / safe_z + h / 2.0
+
+        valid = forward & (lx >= 0) & (lx <= w - 1) & (ly >= 0) & (ly <= h - 1)
+
+        map_x = lx.reshape(y_max - y_min, x_max - x_min).astype(np.float32)
+        map_y = ly.reshape(y_max - y_min, x_max - x_min).astype(np.float32)
+        patch_region = cv2.remap(local_patch, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_CONSTANT)
+
+        valid_mask = valid.reshape(y_max - y_min, x_max - x_min)
+        result[y_min:y_max, x_min:x_max][valid_mask] = patch_region[valid_mask]
+        return result
