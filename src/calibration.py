@@ -59,6 +59,29 @@ class CalibrationModel:
         return cv2.remap(rectified_bgr, map_x, map_y, interpolation=cv2.INTER_LINEAR,
                           borderMode=cv2.BORDER_CONSTANT)
 
+    def pixel_to_ray(self, points):
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        dx = pts[:, 0] - self.cx
+        dy = pts[:, 1] - self.cy
+        r = np.sqrt(dx ** 2 + dy ** 2)
+        theta = r / self.f
+        phi = np.arctan2(dy, dx)
+        x = np.sin(theta) * np.cos(phi)
+        y = np.sin(theta) * np.sin(phi)
+        z = np.cos(theta)
+        return np.stack([x, y, z], axis=1)
+
+    def ray_to_pixel(self, rays):
+        rays = np.asarray(rays, dtype=np.float64).reshape(-1, 3)
+        norms = np.linalg.norm(rays, axis=1, keepdims=True)
+        rays = rays / norms
+        theta = np.arccos(np.clip(rays[:, 2], -1.0, 1.0))
+        phi = np.arctan2(rays[:, 1], rays[:, 0])
+        r = self.f * theta
+        dx = r * np.cos(phi)
+        dy = r * np.sin(phi)
+        return np.stack([self.cx + dx, self.cy + dy], axis=1)
+
     def to_dict(self):
         return {"model": "equidistant_1param", "center": [self.cx, self.cy], "f": self.f, "radius": self.radius}
 

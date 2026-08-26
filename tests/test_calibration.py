@@ -85,3 +85,21 @@ def test_undistort_redistort_image_roundtrip():
         redistorted[mask].astype(np.int16) - raw[mask].astype(np.int16)
     ))
     assert mean_abs_diff < 5.0
+
+
+def test_pixel_to_ray_ray_to_pixel_roundtrip():
+    model = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    points = [[320.0, 320.0], [400.0, 320.0], [320.0, 450.0], [200.0, 500.0], [500.0, 150.0]]
+
+    rays = model.pixel_to_ray(points)
+    roundtripped = model.ray_to_pixel(rays)
+
+    np.testing.assert_allclose(roundtripped, np.asarray(points), atol=1e-6)
+
+
+def test_pixel_to_ray_at_center_is_forward_axis():
+    model = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+
+    ray = model.pixel_to_ray([[320.0, 320.0]])[0]
+
+    np.testing.assert_allclose(ray, [0.0, 0.0, 1.0], atol=1e-9)
