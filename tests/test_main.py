@@ -8,8 +8,8 @@ SAMPLE_RAW_IMAGE = "no_label/P1_B1_1_1/20260820_030004.jpg"
 
 
 def test_cli_writes_output_png(tmp_path):
-    calibration = CalibrationModel(cx=320.0, cy=320.0, f=300.0)
-    slots = [{"id": "slot-A", "polygon_rectified": [[220.0, 150.0], [380.0, 150.0], [400.0, 280.0], [200.0, 280.0]]}]
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    slots = [{"id": "slot-A", "polygon_raw": [[280.0, 20.0], [360.0, 20.0], [360.0, 100.0], [280.0, 100.0]]}]
     label_spec = {"shape": "rect", "width": 0.6, "height": 0.6, "color": [0, 255, 0], "alpha": 0.8, "text": None}
     config_path = tmp_path / "P1_B1_1_1.json"
     SlotConfig("P1_B1_1_1", 640, 640, calibration, slots, label_spec).save(str(config_path))
