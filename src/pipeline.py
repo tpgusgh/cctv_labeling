@@ -64,6 +64,44 @@ def run(config_path, raw_image_path, slot_id, candidate_point, output_path):
     return final
 
 
+def run_auto_all(config_path, raw_image_path, output_path):
+    config = SlotConfig.load(config_path)
+
+    raw = cv2.imread(raw_image_path)
+    if raw is None:
+        raise ValueError(f"could not read image at {raw_image_path}")
+
+    # Detect once on the pristine raw frame, not the progressively-labeled
+    # result image -- a drawn label could otherwise split/alter blobs for
+    # slots processed later in the loop.
+    blobs = detect_windshields(raw, config.calibration)
+
+    result_image = raw
+    results = {}
+    for slot in config.slots:
+        slot_id = slot["id"]
+        try:
+            blob = find_slot_windshield(slot["polygon_raw"], blobs)
+            if blob is None:
+                results[slot_id] = "skipped"
+                continue
+            view, homography = _prepare_slot_view(config, slot, slot_id)
+            candidate_point, width, height = compute_label_candidate(view, homography, blob)
+            label_spec = dict(config.label_spec)
+            label_spec["width"] = width
+            label_spec["height"] = height
+            local_patch = view.rectify(result_image)
+            composited_local = render_label(local_patch, homography, candidate_point, label_spec)
+            result_image = view.unrectify_into(composited_local, result_image)
+            results[slot_id] = "labeled"
+        except (ValueError, cv2.error) as e:
+            results[slot_id] = f"error: {e}"
+
+    if not cv2.imwrite(output_path, result_image):
+        raise ValueError(f"could not write output image to {output_path}")
+    return results
+
+
 def run_auto(config_path, raw_image_path, slot_id, output_path):
     config = SlotConfig.load(config_path)
     slot = _find_slot(config, slot_id, config_path)

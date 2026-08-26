@@ -66,3 +66,24 @@ def test_cli_auto_flag_skips_without_writing_when_no_windshield(tmp_path):
     ])
 
     assert not output_path.exists()
+
+
+def test_cli_auto_all_flag_labels_multiple_slots_without_slot_id(tmp_path):
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
+    slots = [
+        {"id": "car-slot", "polygon_raw": [[243.0, 378.0], [385.0, 378.0], [385.0, 528.0], [243.0, 528.0]]},
+        {"id": "empty-slot", "polygon_raw": [[280.0, 20.0], [360.0, 20.0], [360.0, 100.0], [280.0, 100.0]]},
+    ]
+    label_spec = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
+    config_path = tmp_path / "config.json"
+    SlotConfig("P1_B1_1_21", 640, 640, calibration, slots, label_spec).save(str(config_path))
+    output_path = tmp_path / "final.png"
+
+    main([
+        "--config", str(config_path),
+        "--image", "no_label/P1_B1_1_21/20260820_115029.jpg",
+        "--auto-all",
+        "--output", str(output_path),
+    ])
+
+    assert output_path.exists()

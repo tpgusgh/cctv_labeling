@@ -4,7 +4,7 @@ import pytest
 
 from calibration import CalibrationModel
 from parking_slot import SlotConfig
-from pipeline import run, run_auto
+from pipeline import run, run_auto, run_auto_all
 
 SAMPLE_RAW_IMAGE = "no_label/P1_B1_1_1/20260820_030004.jpg"
 
@@ -116,3 +116,57 @@ def test_run_auto_skips_slot_with_no_visible_windshield(tmp_path):
 
     assert result is None
     assert not output_path.exists()
+
+
+def _write_multi_slot_config(tmp_path):
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
+    slots = [
+        {"id": "car-slot", "polygon_raw": CAR_SLOT_POLYGON_RAW},
+        {"id": "empty-slot", "polygon_raw": EMPTY_SLOT_POLYGON_RAW},
+    ]
+    label_spec = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
+    config = SlotConfig("P1_B1_1_21", 640, 640, calibration, slots, label_spec)
+    path = tmp_path / "config.json"
+    config.save(str(path))
+    return str(path)
+
+
+def test_run_auto_all_labels_visible_slots_and_skips_empty_ones(tmp_path):
+    config_path = _write_multi_slot_config(tmp_path)
+    output_path = tmp_path / "final.png"
+
+    raw = cv2.imread(CAR_SAMPLE_IMAGE)
+    assert raw is not None
+
+    results = run_auto_all(config_path, CAR_SAMPLE_IMAGE, str(output_path))
+
+    assert results == {"car-slot": "labeled", "empty-slot": "skipped"}
+    assert output_path.exists()
+
+    final = cv2.imread(str(output_path))
+    assert final.shape == raw.shape
+    assert not np.array_equal(final, raw)
+
+
+def test_run_auto_all_records_error_without_aborting_other_slots(tmp_path):
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
+    slots = [
+        # this oversized polygon still contains the real blob's centroid (so
+        # find_slot_windshield assigns it a blob and proceeds past the skip
+        # check), but it's too large to fit the fixed local patch, so
+        # _prepare_slot_view raises ValueError for this slot specifically
+        # (see CAR_SLOT_POLYGON_RAW comment above for the original measurement).
+        {"id": "bad-slot", "polygon_raw": [[200.0, 260.0], [460.0, 260.0], [460.0, 500.0], [200.0, 500.0]]},
+        {"id": "car-slot", "polygon_raw": CAR_SLOT_POLYGON_RAW},
+    ]
+    label_spec = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
+    config = SlotConfig("P1_B1_1_21", 640, 640, calibration, slots, label_spec)
+    config_path = tmp_path / "config.json"
+    config.save(str(config_path))
+    output_path = tmp_path / "final.png"
+
+    results = run_auto_all(str(config_path), CAR_SAMPLE_IMAGE, str(output_path))
+
+    assert results["car-slot"] == "labeled"
+    assert results["bad-slot"].startswith("error:")
+    assert output_path.exists()
