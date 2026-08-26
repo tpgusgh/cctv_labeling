@@ -25,6 +25,7 @@ def render_label(rectified_image, homography, candidate_point, label_spec):
     color = tuple(int(c) for c in label_spec["color"])
     alpha = float(label_spec["alpha"])
     text = label_spec.get("text")
+    border_width = int(label_spec.get("border_width", 3))
 
     corners_norm = _label_corners_normalized(candidate_point, width, height)
     corners_px = plane_points_to_pixel(homography, corners_norm)
@@ -40,7 +41,7 @@ def render_label(rectified_image, homography, candidate_point, label_spec):
     poly = corners_px.reshape(-1, 1, 2).astype(np.int32)
 
     overlay = rectified_image.copy()
-    cv2.fillPoly(overlay, [poly], color)
+    cv2.polylines(overlay, [poly], isClosed=True, color=color, thickness=border_width, lineType=cv2.LINE_AA)
     if text:
         centroid = corners_px.mean(axis=0).astype(int)
         cv2.putText(overlay, text, tuple(centroid), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
