@@ -123,3 +123,59 @@ def fit(clicked_points, cx, cy, f_min=50.0, f_max=1000.0, n_coarse=50):
             lo = m1
 
     return CalibrationModel(cx, cy, (lo + hi) / 2)
+
+
+def _rotation_aligning_to_z(v):
+    v = np.asarray(v, dtype=np.float64)
+    v = v / np.linalg.norm(v)
+    z = np.array([0.0, 0.0, 1.0])
+    c = np.dot(v, z)
+
+    if c > 1.0 - 1e-9:
+        return np.eye(3)
+    if c < -1.0 + 1e-9:
+        axis = np.array([1.0, 0.0, 0.0])
+        return 2 * np.outer(axis, axis) - np.eye(3)
+
+    axis = np.cross(v, z)
+    s = np.linalg.norm(axis)
+    axis = axis / s
+    K = np.array([
+        [0.0, -axis[2], axis[1]],
+        [axis[2], 0.0, -axis[0]],
+        [-axis[1], axis[0], 0.0],
+    ])
+    return np.eye(3) + K * s + (K @ K) * (1 - c)
+
+
+class LocalView:
+    def __init__(self, calibration, rotation, local_f, patch_size):
+        self.calibration = calibration
+        self.rotation = rotation
+        self.local_f = local_f
+        self.patch_size = patch_size
+
+    @classmethod
+    def centered_on(cls, calibration, center_raw_point, patch_size, local_f):
+        ray = calibration.pixel_to_ray([center_raw_point])[0]
+        rotation = _rotation_aligning_to_z(ray)
+        return cls(calibration, rotation, local_f, patch_size)
+
+    def raw_to_local(self, raw_points):
+        rays = self.calibration.pixel_to_ray(raw_points)
+        local_rays = rays @ self.rotation.T
+        w, h = self.patch_size
+        lx = self.local_f * local_rays[:, 0] / local_rays[:, 2] + w / 2.0
+        ly = self.local_f * local_rays[:, 1] / local_rays[:, 2] + h / 2.0
+        return np.stack([lx, ly], axis=1)
+
+    def local_to_raw(self, local_points):
+        pts = np.asarray(local_points, dtype=np.float64).reshape(-1, 2)
+        w, h = self.patch_size
+        x = (pts[:, 0] - w / 2.0) / self.local_f
+        y = (pts[:, 1] - h / 2.0) / self.local_f
+        z = np.ones_like(x)
+        local_rays = np.stack([x, y, z], axis=1)
+        local_rays = local_rays / np.linalg.norm(local_rays, axis=1, keepdims=True)
+        world_rays = local_rays @ self.rotation
+        return self.calibration.ray_to_pixel(world_rays)

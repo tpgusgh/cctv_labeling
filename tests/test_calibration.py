@@ -103,3 +103,41 @@ def test_pixel_to_ray_at_center_is_forward_axis():
     ray = model.pixel_to_ray([[320.0, 320.0]])[0]
 
     np.testing.assert_allclose(ray, [0.0, 0.0, 1.0], atol=1e-9)
+
+
+def test_local_view_raw_to_local_roundtrip_off_axis_center():
+    from calibration import LocalView
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    view = LocalView.centered_on(calibration, (320.0, 20.0), patch_size=(300, 300), local_f=300.0)
+
+    raw_points = [[320.0, 20.0], [340.0, 40.0], [300.0, 10.0], [330.0, 60.0]]
+    local_points = view.raw_to_local(raw_points)
+    roundtripped = view.local_to_raw(local_points)
+
+    np.testing.assert_allclose(roundtripped, np.asarray(raw_points), atol=1e-3)
+
+
+def test_local_view_center_maps_to_patch_center():
+    from calibration import LocalView
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    center_raw = (320.0, 20.0)
+    view = LocalView.centered_on(calibration, center_raw, patch_size=(300, 300), local_f=300.0)
+
+    local_center = view.raw_to_local([center_raw])[0]
+
+    np.testing.assert_allclose(local_center, [150.0, 150.0], atol=1e-6)
+
+
+def test_local_view_handles_center_at_optical_axis():
+    from calibration import LocalView
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    view = LocalView.centered_on(calibration, (320.0, 320.0), patch_size=(300, 300), local_f=300.0)
+
+    raw_points = [[320.0, 320.0], [340.0, 330.0], [300.0, 310.0]]
+    local_points = view.raw_to_local(raw_points)
+    roundtripped = view.local_to_raw(local_points)
+
+    np.testing.assert_allclose(roundtripped, np.asarray(raw_points), atol=1e-3)
