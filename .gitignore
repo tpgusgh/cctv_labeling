@@ -1,0 +1,18 @@
+# raw CCTV data, never committed
+/label/
+/no_label/
+/input/
+/output/
+/review/
+/logs/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# model weights
+*.pt
+*.onnx
+/models/*/weights/
