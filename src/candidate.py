@@ -40,4 +40,16 @@ def compute_label_candidate(view, homography, blob, coverage_margin=1.3):
     width = (u_max - u_min) * coverage_margin
     height = (v_max - v_min) * coverage_margin
 
+    # Clamp to this slot's own normalized plane (0-1) so the label never crosses
+    # into a neighboring slot -- adjacent slots share their boundary line, so
+    # staying inside [0,1] here is equivalent to not intruding on the neighbor.
+    u_lo = max(u_center - width / 2.0, 0.0)
+    u_hi = min(u_center + width / 2.0, 1.0)
+    v_lo = max(v_center - height / 2.0, 0.0)
+    v_hi = min(v_center + height / 2.0, 1.0)
+    u_center = (u_lo + u_hi) / 2.0
+    v_center = (v_lo + v_hi) / 2.0
+    width = u_hi - u_lo
+    height = v_hi - v_lo
+
     return (float(u_center), float(v_center)), float(width), float(height)

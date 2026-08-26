@@ -46,3 +46,22 @@ def test_compute_label_candidate_region_fully_contains_blob():
     assert np.all(corners_plane[:, 0] <= u_max + 1e-6)
     assert np.all(corners_plane[:, 1] >= v_min - 1e-6)
     assert np.all(corners_plane[:, 1] <= v_max + 1e-6)
+
+
+def test_compute_label_candidate_clamps_to_slot_bounds_near_edge():
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    view = LocalView.centered_on(calibration, (320.0, 60.0), patch_size=(300, 300), local_f=300.0)
+    slot_polygon_raw = [[280.0, 20.0], [360.0, 20.0], [360.0, 100.0], [280.0, 100.0]]
+    polygon_local = view.raw_to_local(slot_polygon_raw)
+    homography = plane_to_pixel_homography(polygon_local)
+
+    # blob near the slot's right edge -- margin expansion pushes past u=1.0
+    # without clamping (verified: unclamped u_max would be ~1.02)
+    blob = WindshieldBlob(contour=None, bbox=(345, 40, 15, 20), centroid=(352.5, 50.0), area=300)
+
+    candidate_point, width, height = compute_label_candidate(view, homography, blob)
+
+    assert candidate_point[0] - width / 2.0 >= -1e-6
+    assert candidate_point[0] + width / 2.0 <= 1.0 + 1e-6
+    assert candidate_point[1] - height / 2.0 >= -1e-6
+    assert candidate_point[1] + height / 2.0 <= 1.0 + 1e-6
