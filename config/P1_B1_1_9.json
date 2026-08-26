@@ -1,0 +1,10 @@
+{
+  "camera_id": "P1_B1_1_9",
+  "image_width": 640,
+  "image_height": 640,
+  "calibration": { "model": "equidistant_1param", "center": [320.0, 320.0], "f": 204.0, "radius": 320.0 },
+  "slots": [
+    { "id": "A", "polygon_raw": [[280.0, 20.0], [360.0, 20.0], [360.0, 100.0], [280.0, 100.0]] }
+  ],
+  "label_spec": { "shape": "rect", "width": 0.6, "height": 0.6, "color": [0, 200, 90], "alpha": 0.75, "text": null }
+}
