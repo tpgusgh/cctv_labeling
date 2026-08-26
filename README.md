@@ -11,16 +11,23 @@
 | 1. 핵심 기하/렌더링 파이프라인 | ✅ 완료 | 어안렌즈 왜곡 보정 + 슬롯별 로컬 재투영 + 라벨 합성 |
 | 2. 앞유리 탐지 기반 라벨 위치 자동 결정 | ✅ 완료 | 차량 앞유리(검은 영역) 탐지 → 그 위치를 포함하는 라벨 위치/크기 자동 계산, 안 보이면 스킵 |
 | 3. 여러 슬롯 한번에 처리 | ✅ 완료 | 이미지 1장 넣으면 config의 모든 슬롯 자동 검사/라벨링 (`--auto-all`) |
-| 4. label/no_label 분류기 | ⬜ 미착수 | 좋은/나쁜 위치 판별 모델 |
-| 5. 배치 처리기 + 검수/로그 | ⬜ 미착수 | 대량 이미지 일괄 처리, output/review 분류 |
+| 4. 탐지 신뢰도 + 검수 플래그 | ✅ 완료 | blob 모양 기반 confidence score, 낮으면 `review`로 표시 |
+| 5. 배치 처리기 + 검수/로그 | ✅ 완료 | 카메라 폴더 전체 일괄 처리, output/review 자동 분류 + JSON 로그 |
 | 6. GUI (PySide6) | ⬜ 미착수 | 작업자용 데스크톱 앱 |
 
 지금 할 수 있는 것: 카메라 config + 슬롯 좌표만 있으면, **라벨 위치를 사람이
 지정하지 않아도** 슬롯 안 차량의 앞유리를 자동 탐지해서 그 위치를 포함하는
-라벨을 합성한 PNG를 만든다(`--auto`). 앞유리가 안 보이면(빈 슬롯이거나 이웃
-차량에 가려짐) 자동으로 스킵. 수동 위치 지정(`--candidate-u`/`-v`)도 계속
-가능. 한 이미지 안 슬롯 여러 개도 한번에 처리 가능(`--auto-all`). 여러 이미지
-일괄 처리, GUI는 아직 없음.
+라벨을 합성한 PNG를 만든다. 앞유리가 안 보이면(빈 슬롯이거나 이웃 차량에
+가려짐) 자동으로 스킵. 한 이미지 안 슬롯 여러 개도 한번에 처리 가능
+(`--auto-all`). **카메라 폴더 전체(이미지 수십~수백 장)를 한 번에 배치
+처리해서 결과 자동 분류(성공 → output/, 검수 필요 → review/)까지 됨.**
+GUI는 아직 없음.
+
+원래 계획은 sub-project 4를 "label/no_label 분류기"(학습된 모델)로 잡았으나,
+학습 데이터가 없어서(label/no_label 샘플이 실제로는 그런 용도가 아님, 앞선
+브레인스토밍에서 확인됨) 대신 blob 모양 기반 휴리스틱 confidence score로
+대체 — 옆으로 길쭉한(반사광/그림자일 가능성 높은) 탐지는 낮은 점수를 받아
+자동으로 검수 대상이 됨.
 
 원래 계획은 sub-project 2를 "차량 detection(YOLO)"으로 잡았으나, COCO
 사전학습 YOLO가 이 카메라의 top-down 앵글에서 전혀 인식을 못해(spike로 확인)
@@ -47,7 +54,7 @@ python3 -m venv .venv
 .venv/bin/pytest -v
 ```
 
-40개 테스트, 실제 샘플 CCTV 프레임(`no_label/`)을 사용하므로 이 저장소에
+44개 테스트, 실제 샘플 CCTV 프레임(`no_label/`)을 사용하므로 이 저장소에
 `no_label/` 폴더(gitignore됨, 원본 CCTV 데이터라 커밋 안 함)가 있어야 통과함.
 
 ## 현재 파이프라인 실행 (단일 이미지)
@@ -124,10 +131,32 @@ python3 -m venv .venv
   --output output/demo_all.png
 ```
 
-슬롯별 결과(`labeled`/`skipped`/`error: ...`)를 슬롯마다 한 줄씩 출력함. 한
-슬롯 처리 중 에러(예: 슬롯 polygon이 너무 커서 로컬 patch 범위 벗어남)가 나도
-다른 슬롯 처리는 안 멈춤 — 앞유리 탐지는 원본 raw 프레임에서 한 번만 수행
-(먼저 라벨링된 슬롯이 나중 슬롯의 탐지 결과를 오염시키지 않도록).
+슬롯별 결과(`labeled (confidence=0.91)`/`skipped`/`review (confidence=0.25)`/
+`error: ...`)를 슬롯마다 한 줄씩 출력함. confidence는 탐지된 앞유리 blob의
+모양(길쭉하지 않고 compact할수록 높음) 기반 휴리스틱 점수 — 0.5 미만이면
+`review`로 표시됨(라벨은 일단 그려지지만 검수 대상 표시). 한 슬롯 처리 중
+에러(예: 슬롯 polygon이 너무 커서 로컬 patch 범위 벗어남)가 나도 다른 슬롯
+처리는 안 멈춤 — 앞유리 탐지는 원본 raw 프레임에서 한 번만 수행(먼저
+라벨링된 슬롯이 나중 슬롯의 탐지 결과를 오염시키지 않도록).
+
+### 카메라 폴더 전체 배치 처리
+
+카메라 하나의 raw 프레임이 담긴 폴더 전체를 한 번에 처리한다. 슬롯 중
+하나라도 `review`나 `error` 상태면 그 이미지 전체가 `review-dir`로, 아니면
+`output-dir`로 감:
+
+```bash
+.venv/bin/python src/batch_processor.py \
+  --config config/P1_B1_1_9.json \
+  --input-dir no_label/P1_B1_1_9 \
+  --output-dir output/P1_B1_1_9 \
+  --review-dir review/P1_B1_1_9 \
+  --log output/P1_B1_1_9/log.json
+```
+
+`log.json`에 이미지별 상태(`success`/`review`/`error`)와 슬롯별 상세 결과가
+전부 기록됨. 실제 카메라 P1_B1_1_9(57장)로 검증: 55장 성공, 2장 검수 대상,
+0장 에러.
 
 ## 프로젝트 구조
 
@@ -137,15 +166,16 @@ src/
   parking_slot.py  카메라별 슬롯 config 로드/저장
   perspective.py   정규화 좌표 <-> 픽셀 homography (양방향)
   renderer.py      라벨 도형 직접 그리기 (PNG 에셋 없음)
-  windshield.py    차량 앞유리(검은 영역) 탐지
-  candidate.py     탐지된 앞유리 -> 슬롯 배정 + 라벨 위치/크기 계산
-  pipeline.py      전체 오케스트레이션 (수동 run() / 자동 run_auto())
-  main.py          CLI 진입점 (--candidate-u/-v 수동, --auto 자동)
+  windshield.py       차량 앞유리(검은 영역) 탐지 + confidence score
+  candidate.py        탐지된 앞유리 -> 슬롯 배정 + 라벨 위치/크기 계산 (슬롯 경계 clamp)
+  pipeline.py         오케스트레이션 (run() 수동 / run_auto() 슬롯1개 자동 / run_auto_all() 전체 슬롯 자동)
+  main.py             CLI 진입점 (--candidate-u/-v 수동, --auto, --auto-all)
+  batch_processor.py  카메라 폴더 전체 일괄 처리, output/review 분류 + JSON 로그
 tests/             pytest, 실제 샘플 이미지 기반
 config/            카메라별 config JSON (직접 작성)
 docs/superpowers/  설계 문서(spec)와 구현 계획(plan) 이력
 label/, no_label/  원본 CCTV 참고 자료 (gitignore, 커밋 안 함)
-output/            CLI 실행 결과 (gitignore)
+output/, review/   배치 처리 결과 (gitignore)
 ```
 
 ## 알려진 한계
@@ -155,9 +185,12 @@ output/            CLI 실행 결과 (gitignore)
 - 앞유리 탐지는 실제 프레임 1장 기준으로 튜닝한 고정 threshold — 같은 프레임에서
   차량 1대에 배경 노이즈(바닥 반사광 줄무늬, 그림자 등) blob이 18개까지 잡힘.
   길쭉한 반사광 줄무늬는 aspect-ratio 필터(2.5:1 초과 제외)로 6개 걸러짐(18→12),
-  나머지는 슬롯 안에서 가장 큰 blob을 고르는 방식으로 방어. 조명/차종 다양한
-  데이터 쌓이면 적응형 threshold로 교체 필요.
+  나머지는 슬롯 안에서 가장 큰 blob 선택 + confidence score 기반 review 플래그로
+  방어. 조명/차종 다양한 데이터 쌓이면 적응형 threshold로 교체 필요.
+- confidence score는 학습된 분류기가 아니라 blob 모양(aspect ratio) 기반
+  휴리스틱 — label/no_label 학습 데이터가 없어서 실제 분류 모델은 못 만듦.
 - 고정 크기 로컬 패치(`pipeline.py`의 `DEFAULT_PATCH_SIZE`/`DEFAULT_LOCAL_F`)가
   슬롯 크기 상한을 만듦 — 이 카메라 기준 raw 픽셀로 약 142x142 정도. 실제
   주차 슬롯이 이보다 크면 `DEFAULT_LOCAL_F`를 낮춰야 함.
-- 여러 이미지 일괄 처리, GUI 전부 없음 — 이미지·슬롯 1개씩만 처리 가능.
+- 여러 카메라를 한번에 처리하는 기능, GUI 전부 없음 — 카메라 1개씩 배치
+  처리는 되지만 여러 카메라를 도는 상위 오케스트레이션은 아직 없음.
