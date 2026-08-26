@@ -11,12 +11,17 @@ def point_in_polygon(point, polygon):
 
 
 def find_slot_windshield(slot_polygon_raw, blobs):
-    for blob in blobs:
-        if point_in_polygon(blob.centroid, slot_polygon_raw):
-            return blob
-    return None
+    inside = [b for b in blobs if point_in_polygon(b.centroid, slot_polygon_raw)]
+    return max(inside, key=lambda b: b.area, default=None)
 
 
+# Note: containment is empirical, not an exact geometric guarantee -- LocalView's
+# raw<->local mapping is a nonlinear fisheye/gnomonic reprojection (not a
+# homography), so straight edges bow slightly under it. Measured on real data:
+# margin=1.0 already covers ~99.8% of the blob's area; margin=1.3 (the default)
+# measures 100.0%. Either comfortably clears the actual requirement (>=50%
+# coverage) -- 1.3 is chosen for a visibly-larger-than-the-glass label, not
+# because 1.0 would fail the coverage requirement.
 def compute_label_candidate(view, homography, blob, coverage_margin=1.3):
     x, y, w, h = blob.bbox
     corners_raw = [
