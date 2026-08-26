@@ -5,6 +5,7 @@ import pytest
 from calibration import CalibrationModel, fit
 
 SAMPLE_RAW_IMAGE = "no_label/P1_B1_1_1/20260820_030004.jpg"
+PERIPHERAL_SAMPLE_IMAGE = "no_label/P1_B1_1_1/20260820_030004.jpg"
 
 
 def test_undistort_distort_roundtrip():
@@ -141,3 +142,48 @@ def test_local_view_handles_center_at_optical_axis():
     roundtripped = view.local_to_raw(local_points)
 
     np.testing.assert_allclose(roundtripped, np.asarray(raw_points), atol=1e-3)
+
+
+def test_local_view_rectify_output_shape():
+    from calibration import LocalView
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    raw = cv2.imread(PERIPHERAL_SAMPLE_IMAGE)
+    assert raw is not None
+    view = LocalView.centered_on(calibration, (320.0, 20.0), patch_size=(300, 300), local_f=300.0)
+
+    patch = view.rectify(raw)
+
+    assert patch.shape == (300, 300, 3)
+
+
+def test_local_view_roundtrip_preserves_peripheral_content():
+    from calibration import LocalView
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0)
+    raw = cv2.imread(PERIPHERAL_SAMPLE_IMAGE)
+    assert raw is not None
+
+    center_raw = (320.0, 20.0)  # raw radius ~300px from (320,320) -- near the measured
+                                  # real content boundary where the old global model
+                                  # zero-filled everything
+    view = LocalView.centered_on(calibration, center_raw, patch_size=(300, 300), local_f=300.0)
+
+    patch = view.rectify(raw)
+    roundtripped = view.unrectify_into(patch, raw)
+
+    corners_local = np.array([[0, 0], [299, 0], [299, 299], [0, 299]], dtype=np.float64)
+    corners_raw = view.local_to_raw(corners_local)
+    x_min, y_min = corners_raw.min(axis=0).astype(int)
+    x_max, y_max = corners_raw.max(axis=0).astype(int)
+    x_min, y_min = max(x_min, 0), max(y_min, 0)
+    x_max, y_max = min(x_max, raw.shape[1]), min(y_max, raw.shape[0])
+
+    bbox_raw = raw[y_min:y_max, x_min:x_max]
+    bbox_roundtripped = roundtripped[y_min:y_max, x_min:x_max]
+    mean_abs_diff = np.mean(np.abs(bbox_roundtripped.astype(np.int16) - bbox_raw.astype(np.int16)))
+    assert mean_abs_diff < 10.0
+
+    far_raw = raw[550:580, 550:580]
+    far_roundtripped = roundtripped[550:580, 550:580]
+    np.testing.assert_array_equal(far_raw, far_roundtripped)

@@ -179,3 +179,46 @@ class LocalView:
         local_rays = local_rays / np.linalg.norm(local_rays, axis=1, keepdims=True)
         world_rays = local_rays @ self.rotation
         return self.calibration.ray_to_pixel(world_rays)
+
+    def rectify(self, raw_image):
+        w, h = self.patch_size
+        grid_x, grid_y = np.meshgrid(np.arange(w), np.arange(h))
+        local_coords = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1).astype(np.float64)
+        raw_sample_coords = self.local_to_raw(local_coords)
+        map_x = raw_sample_coords[:, 0].reshape(h, w).astype(np.float32)
+        map_y = raw_sample_coords[:, 1].reshape(h, w).astype(np.float32)
+        return cv2.remap(raw_image, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT)
+
+    def unrectify_into(self, local_patch, raw_image):
+        w, h = self.patch_size
+        corners_local = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float64)
+        corners_raw = self.local_to_raw(corners_local)
+        x_min = max(int(np.floor(corners_raw[:, 0].min())), 0)
+        x_max = min(int(np.ceil(corners_raw[:, 0].max())) + 1, raw_image.shape[1])
+        y_min = max(int(np.floor(corners_raw[:, 1].min())), 0)
+        y_max = min(int(np.ceil(corners_raw[:, 1].max())) + 1, raw_image.shape[0])
+
+        result = raw_image.copy()
+        if x_max <= x_min or y_max <= y_min:
+            return result
+
+        grid_x, grid_y = np.meshgrid(np.arange(x_min, x_max), np.arange(y_min, y_max))
+        raw_coords = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1).astype(np.float64)
+        local_sample_coords = self.raw_to_local(raw_coords)
+
+        valid = (
+            (local_sample_coords[:, 0] >= 0) & (local_sample_coords[:, 0] < w) &
+            (local_sample_coords[:, 1] >= 0) & (local_sample_coords[:, 1] < h)
+        )
+
+        map_x = local_sample_coords[:, 0].reshape(y_max - y_min, x_max - x_min).astype(np.float32)
+        map_y = local_sample_coords[:, 1].reshape(y_max - y_min, x_max - x_min).astype(np.float32)
+        patch_region = cv2.remap(local_patch, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_CONSTANT)
+
+        valid_mask = valid.reshape(y_max - y_min, x_max - x_min)
+        region = result[y_min:y_max, x_min:x_max].copy()
+        region[valid_mask] = patch_region[valid_mask]
+        result[y_min:y_max, x_min:x_max] = region
+        return result
