@@ -5,15 +5,18 @@ import cv2
 
 # ponytail: thresholds tuned against a single real frame
 # (no_label/P1_B1_1_21/20260820_115029.jpg, one visible car). Measured false-positive
-# rate on that frame: 18 dark blobs detected for 1 real windshield (shadows, floor
-# marks, structural clutter) -- find_slot_windshield's largest-in-slot-polygon rule
-# is what keeps this usable today. Upgrade path: per-image adaptive threshold
-# (e.g. histogram-based) instead of a fixed brightness cutoff, and/or a shape/aspect
-# ratio filter to reject non-windshield-shaped blobs, once more real camera data
-# is available to tune against.
+# rate on that frame: 18 dark blobs before the aspect-ratio filter below (shadows,
+# glossy-floor light reflections, structural clutter), 12 after -- reflections in
+# particular tend to form thin elongated streaks along the floor's glossy surface,
+# not the roughly-compact blob shape of a real windshield (measured aspect ratio
+# 1.13 for the real windshield, vs up to 10.93 for reflection/shadow streaks).
+# find_slot_windshield's largest-in-slot-polygon rule handles the remainder.
+# Upgrade path: per-image adaptive threshold (e.g. histogram-based) instead of a
+# fixed brightness cutoff, once more real camera data is available to tune against.
 DARK_THRESHOLD = 60
 MIN_BLOB_AREA = 150
 MAX_BLOB_AREA = 8000
+MAX_ASPECT_RATIO = 2.5
 
 
 @dataclass
@@ -44,6 +47,9 @@ def detect_windshields(raw_image, calibration):
         area = cv2.contourArea(c)
         if MIN_BLOB_AREA <= area <= MAX_BLOB_AREA:
             x, y, bw, bh = cv2.boundingRect(c)
+            aspect_ratio = max(bw, bh) / max(min(bw, bh), 1)
+            if aspect_ratio > MAX_ASPECT_RATIO:
+                continue
             m = cv2.moments(c)
             if m["m00"] == 0:
                 continue
