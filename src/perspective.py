@@ -15,3 +15,10 @@ def plane_points_to_pixel(homography, normalized_points):
     pts = np.asarray(normalized_points, dtype=np.float32).reshape(-1, 1, 2)
     out = cv2.perspectiveTransform(pts, homography)
     return out.reshape(-1, 2)
+
+
+def pixel_to_plane_points(homography, pixel_points):
+    pts = np.asarray(pixel_points, dtype=np.float32).reshape(-1, 1, 2)
+    inverse_homography = np.linalg.inv(homography)
+    out = cv2.perspectiveTransform(pts, inverse_homography)
+    return out.reshape(-1, 2)
