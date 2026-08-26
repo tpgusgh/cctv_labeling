@@ -1,5 +1,6 @@
+import json
 import numpy as np
-from calibration import CalibrationModel
+from calibration import CalibrationModel, fit
 
 
 def test_undistort_distort_roundtrip():
@@ -10,3 +11,26 @@ def test_undistort_distort_roundtrip():
     roundtripped = model.distort_points(undistorted)
 
     np.testing.assert_allclose(roundtripped, np.asarray(points), atol=1e-6)
+
+
+def test_fit_recovers_known_focal_length():
+    cx, cy, f_true = 320.0, 320.0, 300.0
+    true_model = CalibrationModel(cx, cy, f_true)
+    rectified_line_points = [[200.0, 250.0], [260.0, 250.0], [320.0, 250.0], [380.0, 250.0], [440.0, 250.0]]
+    raw_clicks = true_model.distort_points(rectified_line_points)
+
+    fitted = fit(raw_clicks, cx=cx, cy=cy)
+
+    assert abs(fitted.f - f_true) / f_true < 0.05
+
+
+def test_to_dict_from_dict_roundtrip(tmp_path):
+    model = CalibrationModel(cx=321.5, cy=318.0, f=287.3)
+    path = tmp_path / "calib.json"
+    path.write_text(json.dumps(model.to_dict()))
+
+    loaded = CalibrationModel.from_dict(json.loads(path.read_text()))
+
+    assert loaded.cx == model.cx
+    assert loaded.cy == model.cy
+    assert loaded.f == model.f

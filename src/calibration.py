@@ -65,3 +65,30 @@ class CalibrationModel:
     def from_dict(cls, d):
         cx, cy = d["center"]
         return cls(cx, cy, d["f"])
+
+
+def fit(clicked_points, cx, cy, f_min=50.0, f_max=1000.0, n_coarse=50):
+    pts = np.asarray(clicked_points, dtype=np.float64).reshape(-1, 2)
+
+    def residual(f):
+        model = CalibrationModel(cx, cy, f)
+        undistorted = model.undistort_points(pts)
+        centered = undistorted - undistorted.mean(axis=0)
+        singular_values = np.linalg.svd(centered, full_matrices=False)[1]
+        return singular_values[-1]
+
+    candidates = np.linspace(f_min, f_max, n_coarse)
+    residuals = [residual(f) for f in candidates]
+    best_idx = int(np.argmin(residuals))
+    lo = candidates[max(best_idx - 1, 0)]
+    hi = candidates[min(best_idx + 1, n_coarse - 1)]
+
+    for _ in range(40):
+        m1 = lo + (hi - lo) / 3
+        m2 = hi - (hi - lo) / 3
+        if residual(m1) < residual(m2):
+            hi = m2
+        else:
+            lo = m1
+
+    return CalibrationModel(cx, cy, (lo + hi) / 2)
