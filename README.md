@@ -54,7 +54,7 @@ python3 -m venv .venv
   "slots": [
     { "id": "A", "polygon_raw": [[280.0, 20.0], [360.0, 20.0], [360.0, 100.0], [280.0, 100.0]] }
   ],
-  "label_spec": { "shape": "rect", "width": 0.6, "height": 0.6, "color": [0, 200, 90], "alpha": 0.75, "text": null }
+  "label_spec": { "shape": "rect", "width": 0.6, "height": 0.6, "color": [235, 206, 135], "alpha": 1.0, "text": null, "border_width": 3 }
 }
 ```
 
@@ -64,6 +64,8 @@ python3 -m venv .venv
 - `slots[].polygon_raw`: 사람이 raw 이미지에서 슬롯 모서리 4점을 클릭한 픽셀
   좌표 그대로. 지금은 이미지 뷰어로 좌표를 직접 확인해서 손으로 넣어야 함
   (GUI 미구현).
+- `label_spec`: 라벨은 채워진 도형이 아니라 **테두리만**(`cv2.polylines`) 그림 —
+  `color`는 BGR 순서(OpenCV 관례), `border_width`는 선 두께(생략 시 3px).
 
 실행:
 
