@@ -6,6 +6,9 @@
 /review/
 /logs/
 
+# git worktrees
+/.worktrees/
+
 # python
 __pycache__/
 *.pyc
