@@ -3,6 +3,14 @@ from dataclasses import dataclass
 import numpy as np
 import cv2
 
+# ponytail: thresholds tuned against a single real frame
+# (no_label/P1_B1_1_21/20260820_115029.jpg, one visible car). Measured false-positive
+# rate on that frame: 18 dark blobs detected for 1 real windshield (shadows, floor
+# marks, structural clutter) -- find_slot_windshield's largest-in-slot-polygon rule
+# is what keeps this usable today. Upgrade path: per-image adaptive threshold
+# (e.g. histogram-based) instead of a fixed brightness cutoff, and/or a shape/aspect
+# ratio filter to reject non-windshield-shaped blobs, once more real camera data
+# is available to tune against.
 DARK_THRESHOLD = 60
 MIN_BLOB_AREA = 150
 MAX_BLOB_AREA = 8000

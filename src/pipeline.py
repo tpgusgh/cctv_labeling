@@ -72,12 +72,13 @@ def run_auto(config_path, raw_image_path, slot_id, output_path):
     if raw is None:
         raise ValueError(f"could not read image at {raw_image_path}")
 
+    view, homography = _prepare_slot_view(config, slot, slot_id)
+
     blobs = detect_windshields(raw, config.calibration)
     blob = find_slot_windshield(slot["polygon_raw"], blobs)
     if blob is None:
         return None
 
-    view, homography = _prepare_slot_view(config, slot, slot_id)
     candidate_point, width, height = compute_label_candidate(view, homography, blob)
 
     label_spec = dict(config.label_spec)
