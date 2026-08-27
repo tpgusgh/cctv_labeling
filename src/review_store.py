@@ -15,6 +15,7 @@ CROPS_DIR = REVIEW_DIR / "crops"
 # directly (that would be per-camera manual coordinate entry, which stays
 # banned -- see docs/superpowers/specs/2026-08-26-review-feedback-classifier-design.md).
 MISSED_PATH = REVIEW_DIR / "missed.jsonl"
+WEB_FLAGS_PATH = REVIEW_DIR / "web_flags.jsonl"
 
 
 def candidate_id(camera_id, polygon):
@@ -93,3 +94,11 @@ def remove_decision(candidate_id_, path=LABELS_PATH):
             if record["id"] != candidate_id_:
                 kept.append(line)
     path.write_text("\n".join(kept) + ("\n" if kept else ""))
+
+
+def append_web_flag(record, path=WEB_FLAGS_PATH):
+    _append(record, path)
+
+
+def load_web_flags(path=WEB_FLAGS_PATH):
+    return _load_latest_by_id(path)
