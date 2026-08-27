@@ -25,3 +25,11 @@ models/*.joblib
 /web_uploads/
 /web/frontend/node_modules/
 /web/frontend/dist/
+
+# worktree symlinks to gitignored real-data dirs (trailing-slash patterns above don't match symlinks)
+/no_label
+/label
+/output
+/review
+/models
+/.venv
