@@ -12,6 +12,7 @@ _LOCK = threading.Lock()
 _JOBS = {}
 
 MODEL_PATH = storage.PROJECT_ROOT / "models" / "slot_classifier.joblib"
+YOLO_MODEL_PATH = storage.PROJECT_ROOT / "models" / "yolov8_seg_slots.pt"
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 
@@ -57,8 +58,15 @@ def _process_camera(job_id, batch_id, camera_id, upload_dir):
         if not config_path.exists():
             _set_status(job_id, status="detecting")
             classifier = slot_classifier.load(MODEL_PATH) if MODEL_PATH.exists() else None
+            yolo_model = None
+            if YOLO_MODEL_PATH.exists():
+                # Import lazily -- ultralytics/torch only get pulled in when
+                # a trained checkpoint actually exists, so the web app stays
+                # light until someone deliberately drops one in.
+                import yolo_slot_detector
+                yolo_model = yolo_slot_detector.load(YOLO_MODEL_PATH)
             generate_config.generate_config(
-                camera_id, str(upload_dir), str(config_path), classifier=classifier)
+                camera_id, str(upload_dir), str(config_path), classifier=classifier, yolo_model=yolo_model)
 
         _set_status(job_id, status="labeling")
         labeled_dir = storage.labeled_dir(batch_id, camera_id)
