@@ -93,6 +93,30 @@ def _shrink_polygon(poly, inset_px=6.0):
     return np.array(shrunk)
 
 
+def fit_quad(cnt, inset_px=6.0):
+    """Reduce an arbitrary contour/polygon to a 4-point quad.
+
+    perspective.plane_to_pixel_homography requires exactly 4 points, but a
+    real contour (classical CV connected-component boundary, or a YOLO-seg
+    mask polygon) rarely comes out as a clean quad. Try a 4-corner
+    approximation first; if the shape doesn't reduce to 4 corners, fall back
+    to its minimum-area bounding rect. Either way, shrink the result inward
+    so it doesn't overshoot the true painted line (see _shrink_polygon).
+    """
+    cnt = np.asarray(cnt)
+    if cnt.dtype not in (np.int32, np.float32):
+        cnt = cnt.astype(np.float32)
+    cnt = cnt.reshape(-1, 1, 2)
+    peri = cv2.arcLength(cnt, True)
+    approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+    if len(approx) == 4:
+        poly = approx.reshape(-1, 2)
+    else:
+        rect = cv2.minAreaRect(cnt)
+        poly = cv2.boxPoints(rect)
+    return _shrink_polygon(poly, inset_px)
+
+
 def detect_slots(median_bgr, calibration, min_area=2800, max_area=9500, min_rectangularity=0.65, inset_px=6.0,
                   floor_radius=300, classifier=None):
     """Find candidate parking-slot polygons in a camera's median-stacked reference image.
@@ -139,8 +163,6 @@ def detect_slots(median_bgr, calibration, min_area=2800, max_area=9500, min_rect
         if not contours:
             continue
         cnt = max(contours, key=cv2.contourArea)
-        peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
         rect = cv2.minAreaRect(cnt)
         rect_area = rect[1][0] * rect[1][1]
         if rect_area == 0:
@@ -148,8 +170,7 @@ def detect_slots(median_bgr, calibration, min_area=2800, max_area=9500, min_rect
         rectangularity = area / rect_area
         if rectangularity < min_rectangularity:
             continue
-        poly = approx.reshape(-1, 2) if len(approx) == 4 else cv2.boxPoints(rect)
-        poly = _shrink_polygon(poly, inset_px)
+        poly = fit_quad(cnt, inset_px)
         confidence = round(float(min(rectangularity, 1.0)), 3)
 
         if classifier is not None:
