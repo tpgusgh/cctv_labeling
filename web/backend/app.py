@@ -3,8 +3,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
+import io
+import zipfile
 import cv2
-from flask import Flask, jsonify, request, send_file, Response
+from flask import Flask, jsonify, request, send_file, send_from_directory, Response
 
 import jobs
 import overrides
@@ -15,6 +17,8 @@ from parking_slot import SlotConfig
 from datetime import datetime, timezone
 
 app = Flask(__name__)
+
+FRONTEND_DIST = storage.PROJECT_ROOT / "web" / "frontend" / "dist"
 
 
 def _grouped_upload_files():
@@ -165,6 +169,44 @@ def edit_label(batch_id, camera_id, photo, slot_id):
 
     _rerender_photo(batch_id, camera_id, photo)
     return jsonify({"ok": True})
+
+
+@app.get("/api/batches/<batch_id>/cameras/<camera_id>/download")
+def download_camera(batch_id, camera_id):
+    labeled_dir = storage.labeled_dir(batch_id, camera_id)
+    if not labeled_dir.exists():
+        return jsonify({"error": "not found"}), 404
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for p in labeled_dir.glob("*.png"):
+            zf.write(p, arcname=p.name)
+    buf.seek(0)
+    return send_file(buf, mimetype="application/zip", as_attachment=True, download_name=f"{camera_id}.zip")
+
+
+@app.get("/api/batches/<batch_id>/download")
+def download_batch(batch_id):
+    batch_root = storage.batch_dir(batch_id)
+    if not batch_root.exists():
+        return jsonify({"error": "not found"}), 404
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for camera_dir in batch_root.iterdir():
+            labeled_dir = camera_dir / "labeled"
+            if not labeled_dir.exists():
+                continue
+            for p in labeled_dir.glob("*.png"):
+                zf.write(p, arcname=f"{camera_dir.name}/{p.name}")
+    buf.seek(0)
+    return send_file(buf, mimetype="application/zip", as_attachment=True, download_name=f"{batch_id}.zip")
+
+
+@app.get("/", defaults={"path": ""})
+@app.get("/<path:path>")
+def serve_frontend(path):
+    if path and (FRONTEND_DIST / path).is_file():
+        return send_from_directory(str(FRONTEND_DIST), path)
+    return send_from_directory(str(FRONTEND_DIST), "index.html")
 
 
 if __name__ == "__main__":

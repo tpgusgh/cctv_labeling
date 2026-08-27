@@ -1,5 +1,7 @@
 import io
+import io as io_module
 import shutil
+import zipfile
 from pathlib import Path
 
 import app as flask_app_module
@@ -166,3 +168,25 @@ def test_get_slot_patch_returns_image_bytes(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_download_camera_returns_zip_with_labeled_photo(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.get(f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/download")
+
+    assert response.status_code == 200
+    zf = zipfile.ZipFile(io_module.BytesIO(response.data))
+    assert f"{photo_stem}.png" in zf.namelist()
+
+
+def test_download_batch_returns_zip_with_camera_subfolder(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.get(f"/api/batches/{batch_id}/download")
+
+    assert response.status_code == 200
+    zf = zipfile.ZipFile(io_module.BytesIO(response.data))
+    assert f"{SAMPLE_CAMERA}/{photo_stem}.png" in zf.namelist()
