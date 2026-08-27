@@ -45,41 +45,62 @@ def test_detect_slots_finds_plausible_candidates_in_real_camera_folder():
         assert 0.0 <= d["confidence"] <= 1.0
 
 
-def test_detect_slots_is_deterministic_on_real_camera_folder():
-    """Verify that polygon coordinates don't drift across refactors.
+def test_detect_slots_matches_golden_polygon_from_real_camera():
+    """Verify that polygon coordinates match pre-recorded golden values.
 
-    Runs detect_slots twice on the same real camera data and asserts:
-    1. Same number of detections (already tested above, but explicit here)
-    2. Detection ordering and polygon coordinates are identical
-    3. All polygon coordinates match to high precision
+    This is the critical regression test for coordinate-level precision.
+    It loads a real polygon that was detected in a prior session and verifies
+    that re-running detect_slots on the same camera folder produces a
+    polygon within a very tight tolerance (1e-9 absolute error).
 
-    This catches numeric precision changes (e.g., dtype casts that alter
-    approxPolyDP or minAreaRect output) that the count-only test would miss.
+    This test would FAIL if fit_quad() forces a dtype=float32 cast,
+    which causes ~7.7e-6 coordinate drift on the approxPolyDP fast path.
+    It also catches any other precision regressions.
+
+    Golden polygon from review/candidates.jsonl for camera P1_B1_1_9:
+    - Pre-recorded detection from a prior successful run
+    - Used as a pin to catch coordinate drift across refactors
     """
     image_paths = sorted(glob.glob(f"{CAMERA_FOLDER}/*.jpg"))
     assert len(image_paths) > 10
 
     median = median_stack(image_paths)
     calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
+    detections = detect_slots(median, calibration)
 
-    # Run twice to verify determinism
-    detections_1 = detect_slots(median, calibration)
-    detections_2 = detect_slots(median, calibration)
+    # Golden polygon from review/candidates.jsonl for this camera
+    # This polygon was detected in a prior successful run and serves as
+    # a regression pin. Coordinate precision matters: dtype casts that alter
+    # approxPolyDP's numeric behavior will cause drift.
+    golden_polygon = np.array([
+        [308.06011571545224, 138.57660916268068],
+        [239.98448195576762, 130.06716081775699],
+        [254.12456246347682, 16.946461658595503],
+        [322.200224905487, 25.455909858017737]
+    ])
 
-    # Must have same count
-    assert len(detections_1) == len(detections_2)
+    # Find a detected polygon that matches the golden value within tolerance.
+    # Sort by proximity to golden centroid to find the best match.
+    golden_centroid = golden_polygon.mean(axis=0)
+    matched = False
+    for d in detections:
+        detected_poly = np.array(d["polygon"])
+        detected_centroid = detected_poly.mean(axis=0)
+        # Quick proximity check: centroids must be within ~10 pixels
+        if np.linalg.norm(detected_centroid - golden_centroid) > 10:
+            continue
+        # If centroids are close, check full polygon match with tight tolerance
+        try:
+            np.testing.assert_allclose(detected_poly, golden_polygon, atol=1e-9, rtol=1e-9,
+                                        err_msg=f"Polygon coordinates diverged from golden: {detected_poly}")
+            matched = True
+            break
+        except AssertionError:
+            # This detected polygon was close but not an exact match; try the next one
+            continue
 
-    # All polygons must match exactly (within floating point tolerance)
-    for d1, d2 in zip(detections_1, detections_2):
-        poly1 = np.array(d1["polygon"])
-        poly2 = np.array(d2["polygon"])
-        # Allow 1e-8 tolerance for floating point rounding, but no larger
-        np.testing.assert_allclose(poly1, poly2, rtol=1e-8, atol=1e-8,
-                                    err_msg="Polygon coordinates drifted across runs")
-
-    # Also explicitly assert that at least the first detection exists and
-    # has reasonable coordinate ranges (sanity check the test setup)
-    assert len(detections_1) >= 4, "Need at least 4 detections to meaningfully test coordinates"
-    first_poly = np.array(detections_1[0]["polygon"])
-    assert np.all(first_poly >= 0), "Polygon coordinates should be non-negative"
-    assert np.all(first_poly < 640), "Polygon coordinates should be within image bounds"
+    assert matched, (
+        f"No detected polygon matched golden value within tolerance. "
+        f"Golden polygon centroid: {golden_centroid}. "
+        f"Detected centroids: {[np.array(d['polygon']).mean(axis=0) for d in detections]}"
+    )
