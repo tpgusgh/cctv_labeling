@@ -146,6 +146,12 @@ def _flag_web_reject(camera_id, slot_id):
 
 @app.post("/api/batches/<batch_id>/cameras/<camera_id>/photos/<photo>/labels/<slot_id>")
 def edit_label(batch_id, camera_id, photo, slot_id):
+    config_path = storage.PROJECT_ROOT / "config" / f"{camera_id}.json"
+    if not config_path.exists():
+        return jsonify({"error": "camera not found"}), 404
+    if _find_raw_photo(batch_id, camera_id, photo) is None:
+        return jsonify({"error": "photo not found"}), 404
+
     payload = request.get_json(force=True)
     action = payload.get("action")
 
