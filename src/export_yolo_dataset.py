@@ -46,6 +46,13 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
     summary = {"train_cameras": train_cameras, "val_cameras": val_cameras,
                "train_images": 0, "val_images": 0}
 
+    # A camera can move between train/val across re-runs (different
+    # val_every, or new review data changing the sorted camera order).
+    # Clear stale output before re-writing so it doesn't end up copied into
+    # both splits, which would defeat the camera-level train/val split.
+    shutil.rmtree(output_dir / "images", ignore_errors=True)
+    shutil.rmtree(output_dir / "labels", ignore_errors=True)
+
     for split, cameras in (("train", train_cameras), ("val", val_cameras)):
         images_dir = output_dir / "images" / split
         labels_dir = output_dir / "labels" / split

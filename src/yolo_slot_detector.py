@@ -23,6 +23,8 @@ def detect_slots(image_bgr, model, conf=0.25):
     detections = []
     confidences = result.boxes.conf.tolist()
     for polygon_pts, confidence in zip(result.masks.xy, confidences):
+        if len(polygon_pts) < 3:
+            continue
         poly = fit_quad(polygon_pts, inset_px=6.0)
         detections.append({"polygon": poly.tolist(), "confidence": round(float(confidence), 3)})
     return detections

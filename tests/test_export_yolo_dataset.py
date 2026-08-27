@@ -74,6 +74,40 @@ def test_export_dataset_replicates_camera_polygons_across_all_its_frames(tmp_pat
     assert "parking_slot" in dataset_yaml
 
 
+def test_export_dataset_rerun_does_not_leak_camera_into_both_splits(tmp_path):
+    # 3 cameras, sorted: camA, camB, camC.
+    no_label_dir = tmp_path / "no_label"
+    for cam in ("camA", "camB", "camC"):
+        (no_label_dir / cam).mkdir(parents=True)
+        _write_frame(no_label_dir / cam / "frame1.jpg")
+
+    labels_path = tmp_path / "labels.jsonl"
+    _write_jsonl(labels_path, [
+        {"id": f"l-{cam}", "camera_id": cam, "decision": "accept",
+         "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]}
+        for cam in ("camA", "camB", "camC")
+    ])
+    missed_path = tmp_path / "missed_empty.jsonl"
+
+    output_dir = tmp_path / "dataset"
+
+    # val_every=3 -> val_cameras = camA only (index 0), rest train.
+    export_yolo_dataset.export_dataset(
+        no_label_dir=no_label_dir, output_dir=output_dir,
+        labels_path=labels_path, missed_path=missed_path, val_every=3)
+    assert (output_dir / "images" / "train" / "camB__frame1.jpg").exists()
+
+    # val_every=2 -> val_cameras = camA, camC (indices 0, 2); camB moves... stays train.
+    # Use val_every=1 so every camera is now val, moving camB out of train.
+    export_yolo_dataset.export_dataset(
+        no_label_dir=no_label_dir, output_dir=output_dir,
+        labels_path=labels_path, missed_path=missed_path, val_every=1)
+
+    assert (output_dir / "images" / "val" / "camB__frame1.jpg").exists()
+    assert not (output_dir / "images" / "train" / "camB__frame1.jpg").exists()
+    assert not (output_dir / "labels" / "train" / "camB__frame1.txt").exists()
+
+
 def test_export_dataset_raises_when_fewer_than_two_labeled_cameras(tmp_path):
     no_label_dir = tmp_path / "no_label"
     (no_label_dir / "camA").mkdir(parents=True)

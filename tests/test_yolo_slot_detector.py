@@ -48,6 +48,17 @@ def test_detect_slots_converts_mask_polygons_to_quads():
     assert detections[0]["confidence"] == 0.87
 
 
+def test_detect_slots_skips_degenerate_zero_point_polygon():
+    degenerate = np.zeros((0, 2), dtype=np.float32)
+    valid = np.array([[10, 10], [110, 10], [110, 60], [10, 60]], dtype=np.float32)
+    model = _FakeModel(polygons=[degenerate, valid], confs=[0.5, 0.87])
+
+    detections = yolo_slot_detector.detect_slots(np.zeros((100, 150, 3), dtype=np.uint8), model)
+
+    assert len(detections) == 1
+    assert detections[0]["confidence"] == 0.87
+
+
 def test_detect_slots_returns_empty_list_when_no_masks():
     model = _FakeModel(polygons=None, confs=[])
 

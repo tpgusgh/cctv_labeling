@@ -10,7 +10,6 @@ from calibration import CalibrationModel
 from parking_slot import SlotConfig
 from slot_classifier import crop_polygon
 from slot_detection import median_stack, detect_slots
-import yolo_slot_detector
 
 DEFAULT_LABEL_SPEC = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
 REVIEW_CONFIDENCE_THRESHOLD = 0.75
@@ -47,6 +46,7 @@ def generate_config(camera_id, frames_dir, output_path, cx=320.0, cy=320.0, f=20
     median = median_stack(image_paths)
     calibration = CalibrationModel(cx=cx, cy=cy, f=f, radius=radius)
     if yolo_model is not None:
+        import yolo_slot_detector
         detections = yolo_slot_detector.detect_slots(median, yolo_model)
     else:
         detections = detect_slots(median, calibration, classifier=classifier)
@@ -81,7 +81,10 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     classifier = slot_classifier.load(args.model) if args.model else None
-    yolo_model = yolo_slot_detector.load(args.yolo_model) if args.yolo_model else None
+    yolo_model = None
+    if args.yolo_model:
+        import yolo_slot_detector
+        yolo_model = yolo_slot_detector.load(args.yolo_model)
     slots, needs_review = generate_config(args.camera_id, args.frames_dir, args.output, args.cx, args.cy, args.f,
                                            args.radius, args.image_width, args.image_height, classifier, yolo_model)
     status = "REVIEW RECOMMENDED (low confidence or no slots found)" if needs_review else "ok"

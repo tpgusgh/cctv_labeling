@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 import generate_config
+import yolo_slot_detector
 
 
 def _make_frames_dir(tmp_path):
@@ -14,6 +15,7 @@ def _make_frames_dir(tmp_path):
 
 
 def test_generate_config_uses_yolo_model_when_given(tmp_path, monkeypatch):
+    monkeypatch.setattr(generate_config, "_save_review_candidates", lambda *a, **k: None)
     frames_dir = _make_frames_dir(tmp_path)
     fake_polygon = [[1.0, 1.0], [10.0, 1.0], [10.0, 10.0], [1.0, 10.0]]
     captured = {}
@@ -22,7 +24,9 @@ def test_generate_config_uses_yolo_model_when_given(tmp_path, monkeypatch):
         captured["model"] = model
         return [{"polygon": fake_polygon, "confidence": 0.9}]
 
-    monkeypatch.setattr(generate_config.yolo_slot_detector, "detect_slots", _fake_detect_slots)
+    # generate_config() imports yolo_slot_detector lazily; patch the shared
+    # module object (sys.modules-cached) rather than a generate_config attribute.
+    monkeypatch.setattr(yolo_slot_detector, "detect_slots", _fake_detect_slots)
 
     sentinel_model = object()
     output_path = tmp_path / "config.json"
@@ -36,6 +40,7 @@ def test_generate_config_uses_yolo_model_when_given(tmp_path, monkeypatch):
 
 
 def test_generate_config_uses_classical_detection_when_no_yolo_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(generate_config, "_save_review_candidates", lambda *a, **k: None)
     frames_dir = _make_frames_dir(tmp_path)
     called = {}
 
@@ -43,7 +48,7 @@ def test_generate_config_uses_classical_detection_when_no_yolo_model(tmp_path, m
         called["yolo"] = True
         return []
 
-    monkeypatch.setattr(generate_config.yolo_slot_detector, "detect_slots", _fake_yolo_detect_slots)
+    monkeypatch.setattr(yolo_slot_detector, "detect_slots", _fake_yolo_detect_slots)
 
     output_path = tmp_path / "config.json"
     generate_config.generate_config("cam-1", str(frames_dir), str(output_path))
