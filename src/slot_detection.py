@@ -103,7 +103,7 @@ def fit_quad(cnt, inset_px=6.0):
     to its minimum-area bounding rect. Either way, shrink the result inward
     so it doesn't overshoot the true painted line (see _shrink_polygon).
     """
-    cnt = np.asarray(cnt, dtype=np.float32).reshape(-1, 1, 2)
+    cnt = np.asarray(cnt).reshape(-1, 1, 2)
     peri = cv2.arcLength(cnt, True)
     approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
     if len(approx) == 4:
