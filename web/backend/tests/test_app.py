@@ -106,6 +106,14 @@ def test_delete_label_excludes_slot_and_flags_review(tmp_path, monkeypatch):
     batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
     client = _client()
 
+    import functools
+    import review_store
+    flags_path = tmp_path / "web_flags.jsonl"
+    monkeypatch.setattr(
+        review_store, "append_web_flag",
+        functools.partial(review_store.append_web_flag, path=flags_path),
+    )
+
     response = client.post(
         f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}/labels/slot-0",
         json={"action": "delete"},
@@ -115,9 +123,8 @@ def test_delete_label_excludes_slot_and_flags_review(tmp_path, monkeypatch):
     import overrides
     assert overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)["excluded_slots"] == ["slot-0"]
 
-    import review_store
-    flags = review_store.load_web_flags()
-    assert any(f["camera_id"] == SAMPLE_CAMERA and f["slot_id"] == "slot-0" for f in flags)
+    flags = review_store.load_web_flags(flags_path)
+    assert any(f["camera_id"] == SAMPLE_CAMERA and f["slot_id"] == "slot-0" and f["photo"] == photo_stem for f in flags)
 
 
 def test_adjust_label_updates_override(tmp_path, monkeypatch):

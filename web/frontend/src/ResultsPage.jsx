@@ -68,7 +68,6 @@ function PhotoCard({ batchId, cameraId, photo, onChanged }) {
   const [editingSlot, setEditingSlot] = useState(null)
 
   async function handleDelete(slotId) {
-    if (!slotId) return
     await editLabel(batchId, cameraId, photo.photo, slotId, 'delete')
     onChanged()
   }
@@ -77,31 +76,17 @@ function PhotoCard({ batchId, cameraId, photo, onChanged }) {
     <div style={{ border: '1px solid #ccc', padding: 8, margin: 8, display: 'inline-block', verticalAlign: 'top' }}>
       <img src={photoUrl(batchId, cameraId, photo.photo)} width={240} alt={photo.photo} />
       <div>{photo.photo}</div>
-      <div>
-        슬롯 삭제:
-        <input
-          placeholder="slot-id + Enter"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              handleDelete(e.target.value)
-              e.target.value = ''
-            }
-          }}
-        />
-      </div>
-      <div>
-        슬롯 수정:
-        <input
-          placeholder="slot-id + Enter"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && e.target.value) {
-              setEditingSlot(e.target.value)
-              e.target.value = ''
-            }
-          }}
-        />
-      </div>
-      {photo.excluded_slots.length > 0 && <div>삭제됨: {photo.excluded_slots.join(', ')}</div>}
+      <table>
+        <tbody>
+          {photo.slot_ids.map((slotId) => (
+            <tr key={slotId}>
+              <td>{slotId}{photo.excluded_slots.includes(slotId) ? ' (삭제됨)' : ''}</td>
+              <td><button onClick={() => handleDelete(slotId)}>삭제</button></td>
+              <td><button onClick={() => setEditingSlot(slotId)}>수정</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       {editingSlot && (
         <SlotAdjustModal
           batchId={batchId}
