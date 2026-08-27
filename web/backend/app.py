@@ -80,11 +80,19 @@ def list_photos(batch_id, camera_id):
     labeled_dir = storage.labeled_dir(batch_id, camera_id)
     if not labeled_dir.exists():
         return jsonify({"photos": []})
+
+    config_path = storage.PROJECT_ROOT / "config" / f"{camera_id}.json"
+    slot_ids = []
+    if config_path.exists():
+        config = SlotConfig.load(str(config_path))
+        slot_ids = [s["id"] for s in config.slots]
+
     photos = []
     for p in sorted(labeled_dir.glob("*.png")):
         override = overrides.load_override(batch_id, camera_id, p.stem)
         photos.append({
             "photo": p.stem,
+            "slot_ids": slot_ids,
             "excluded_slots": override["excluded_slots"],
             "adjusted": override["adjusted"],
         })
@@ -134,7 +142,7 @@ def _rerender_photo(batch_id, camera_id, photo):
     )
 
 
-def _flag_web_reject(camera_id, slot_id):
+def _flag_web_reject(camera_id, slot_id, photo):
     config_path = storage.PROJECT_ROOT / "config" / f"{camera_id}.json"
     config = SlotConfig.load(str(config_path))
     slot = next((s for s in config.slots if s["id"] == slot_id), None)
@@ -144,6 +152,7 @@ def _flag_web_reject(camera_id, slot_id):
         "id": review_store.candidate_id(camera_id, slot["polygon_raw"]),
         "camera_id": camera_id,
         "slot_id": slot_id,
+        "photo": photo,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
     review_store.append_web_flag(record)
@@ -162,7 +171,7 @@ def edit_label(batch_id, camera_id, photo, slot_id):
 
     if action == "delete":
         overrides.exclude_slot(batch_id, camera_id, photo, slot_id)
-        _flag_web_reject(camera_id, slot_id)
+        _flag_web_reject(camera_id, slot_id, photo)
     elif action == "adjust":
         config = SlotConfig.load(str(config_path))
         slot = next((s for s in config.slots if s["id"] == slot_id), None)
