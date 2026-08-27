@@ -8,6 +8,22 @@ export async function uploadFolders(fileList) {
   return res.json()
 }
 
+export async function listCameras() {
+  const res = await fetch('/api/cameras')
+  if (!res.ok) throw new Error('camera list fetch failed')
+  return res.json()
+}
+
+export async function uploadLooseFiles(fileList, cameraId) {
+  const formData = new FormData()
+  for (const file of fileList) {
+    formData.append('files', file, `${cameraId}/${file.name}`)
+  }
+  const res = await fetch('/api/upload', { method: 'POST', body: formData })
+  if (!res.ok) throw new Error('upload failed')
+  return res.json()
+}
+
 export async function getBatchStatus(batchId) {
   const res = await fetch(`/api/batches/${batchId}/status`)
   if (!res.ok) throw new Error('status fetch failed')

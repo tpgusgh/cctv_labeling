@@ -36,6 +36,15 @@ def _grouped_upload_files():
     return grouped
 
 
+@app.get("/api/cameras")
+def list_cameras():
+    config_dir = storage.PROJECT_ROOT / "config"
+    if not config_dir.exists():
+        return jsonify({"cameras": []})
+    camera_ids = sorted(p.stem for p in config_dir.glob("*.json"))
+    return jsonify({"cameras": camera_ids})
+
+
 @app.post("/api/upload")
 def upload():
     grouped = _grouped_upload_files()
