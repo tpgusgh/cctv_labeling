@@ -60,3 +60,11 @@ def test_missed_annotation_round_trip_and_removal(tmp_path):
 
     review_store.remove_missed_annotation("m1", path)
     assert review_store.load_missed_annotations(path) == []
+
+
+def test_web_flag_round_trip(tmp_path):
+    path = tmp_path / "web_flags.jsonl"
+    record = {"id": "abc", "camera_id": "cam-1", "slot_id": "slot-0", "photo": "20260101_1.jpg"}
+    review_store.append_web_flag(record, path)
+
+    assert review_store.load_web_flags(path) == [record]

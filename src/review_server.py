@@ -14,7 +14,10 @@ FRAME_SIZE = 640  # this project's cameras are all 640x640 (see generate_config.
 
 
 def _render_page(candidate):
+    flagged_count = len(review_store.load_web_flags())
+    flag_note = f"<p>웹에서 지적된 후보: {flagged_count}개 (우선 표시됨)</p>" if flagged_count else ""
     body = "<h1>남은 후보 없음 (전부 리뷰 완료)</h1>" if candidate is None else f"""
+{flag_note}
 <h1>후보 리뷰</h1>
 <p>카메라: {candidate['camera_id']} | 신뢰도: {candidate['confidence']}</p>
 <img src="/crops/{candidate['id']}.png" style="max-width:480px;border:1px solid #333">
@@ -37,7 +40,11 @@ function decide(decision) {{
 def _next_unreviewed(candidates, labels):
     by_id = {c["id"]: c for c in candidates}
     ids = review_store.unreviewed_ids(list(by_id.keys()), labels)
-    return by_id[ids[0]] if ids else None
+    if not ids:
+        return None
+    flagged_ids = {f["id"] for f in review_store.load_web_flags()}
+    flagged_first = [i for i in ids if i in flagged_ids] + [i for i in ids if i not in flagged_ids]
+    return by_id[flagged_first[0]]
 
 
 def _render_history(labels):
