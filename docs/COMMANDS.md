@@ -143,3 +143,48 @@ config 안 모든 슬롯 한번에:
 
 성공은 `output-dir`, 슬롯 중 하나라도 review/error면 `review-dir`로 감.
 `log.json`에 이미지별 상태 전부 기록.
+
+## 7. YOLOv8-seg 학습 (선택, 딥러닝 파이프라인)
+
+리뷰에서 쌓인 승인/미탐 라벨(`review/labels.jsonl` accept + `review/missed.jsonl`)로
+YOLOv8-seg 모델을 파인튜닝하는 별도 경로. **아직 opt-in** — 웹앱
+(`web/backend/jobs.py`)과 1번의 기본 동작은 이 모델을 안 쓰고 여전히
+classical CV(Hough+연결영역)만 씀.
+
+### 7-1. 데이터셋 export
+
+```bash
+.venv/bin/python src/export_yolo_dataset.py --output /tmp/yolo_dataset
+```
+
+카메라 고정 전제 활용: 폴리곤 1세트를 그 카메라의 모든 원본 프레임에
+복제해서 학습 이미지로 씀. 카메라 단위로 train/val 분리(`--val-every`로
+비율 조절, 기본 5 — 5개 중 1개꼴로 val). `--no-label-dir`/`--labels`/
+`--missed`로 경로 바꿀 수 있음. 라벨 있는 카메라 2개 미만이면 에러.
+
+### 7-2. 학습
+
+```bash
+.venv/bin/python src/train_yolo_seg.py \
+  --data /tmp/yolo_dataset/dataset.yaml \
+  --epochs 100 \
+  --output models/yolov8_seg_slots.pt
+```
+
+최초 실행 시 ultralytics 서버에서 `yolov8n-seg.pt`(COCO 사전학습) 자동
+다운로드 — 이때만 네트워크 필요, CCTV 사진 자체는 어디로도 안 나감.
+`--base-model`/`--epochs`로 조절.
+
+### 7-3. 학습된 모델로 탐지
+
+```bash
+.venv/bin/python src/generate_config.py \
+  --camera-id P1_B1_1_9 \
+  --frames-dir no_label/P1_B1_1_9 \
+  --output config/P1_B1_1_9.json \
+  --yolo-model models/yolov8_seg_slots.pt
+```
+
+`--yolo-model` 주면 classical CV 대신 이 모델로 탐지. `--model`(분류기)과
+같이 주면 `--yolo-model`이 우선. 아직 웹앱에는 안 이어져 있음 — CLI에서만
+가능.
