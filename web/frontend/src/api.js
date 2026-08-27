@@ -28,13 +28,13 @@ export function slotPatchUrl(batchId, cameraId, photo, slotId) {
   return `/api/batches/${batchId}/cameras/${cameraId}/photos/${photo}/slots/${slotId}/patch.png`
 }
 
-export async function editLabel(batchId, cameraId, photo, slotId, action, box) {
+export async function editLabel(batchId, cameraId, photo, slotId, action, extra = {}) {
   const res = await fetch(
     `/api/batches/${batchId}/cameras/${cameraId}/photos/${photo}/labels/${slotId}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(box ? { action, box } : { action }),
+      body: JSON.stringify({ action, ...extra }),
     },
   )
   if (!res.ok) throw new Error('label edit failed')

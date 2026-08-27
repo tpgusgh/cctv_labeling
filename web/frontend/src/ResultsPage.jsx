@@ -17,14 +17,13 @@ function SlotAdjustModal({ batchId, cameraId, photo, slotId, onClose, onSaved })
   }
   async function handleMouseUp() {
     if (!drag) return
-    const cx = (drag.x0 + drag.x1) / 2 / PATCH_SIZE
-    const cy = (drag.y0 + drag.y1) / 2 / PATCH_SIZE
-    const w = Math.abs(drag.x1 - drag.x0) / PATCH_SIZE
-    const h = Math.abs(drag.y1 - drag.y0) / PATCH_SIZE
     const finished = drag
     setDrag(null)
     if (Math.abs(finished.x1 - finished.x0) < 10 || Math.abs(finished.y1 - finished.y0) < 10) return
-    await editLabel(batchId, cameraId, photo, slotId, 'adjust', { cx, cy, w, h })
+
+    await editLabel(batchId, cameraId, photo, slotId, 'adjust', {
+      patch_box: { x0: finished.x0, y0: finished.y0, x1: finished.x1, y1: finished.y1 },
+    })
     onSaved()
   }
 
