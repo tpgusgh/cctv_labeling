@@ -20,3 +20,8 @@ venv/
 *.onnx
 /models/*/weights/
 models/*.joblib
+
+# web app runtime data
+/web_uploads/
+/web/frontend/node_modules/
+/web/frontend/dist/
