@@ -10,6 +10,7 @@ from calibration import CalibrationModel
 from parking_slot import SlotConfig
 from slot_classifier import crop_polygon
 from slot_detection import median_stack, detect_slots
+import yolo_slot_detector
 
 DEFAULT_LABEL_SPEC = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
 REVIEW_CONFIDENCE_THRESHOLD = 0.75
@@ -38,14 +39,17 @@ def _save_review_candidates(camera_id, image_path, median, detections):
 
 
 def generate_config(camera_id, frames_dir, output_path, cx=320.0, cy=320.0, f=204.0, radius=320.0,
-                     image_width=640, image_height=640, classifier=None):
+                     image_width=640, image_height=640, classifier=None, yolo_model=None):
     image_paths = sorted({p for pattern in IMAGE_EXTENSIONS for p in glob.glob(str(Path(frames_dir) / pattern))})
     if not image_paths:
         raise ValueError(f"no frames found in {frames_dir}")
 
     median = median_stack(image_paths)
     calibration = CalibrationModel(cx=cx, cy=cy, f=f, radius=radius)
-    detections = detect_slots(median, calibration, classifier=classifier)
+    if yolo_model is not None:
+        detections = yolo_slot_detector.detect_slots(median, yolo_model)
+    else:
+        detections = detect_slots(median, calibration, classifier=classifier)
     _save_review_candidates(camera_id, image_paths[0], median, detections)
 
     slots = [{"id": f"slot-{i}", "polygon_raw": d["polygon"]} for i, d in enumerate(detections)]
@@ -69,14 +73,17 @@ def build_parser():
     parser.add_argument("--image-width", type=int, default=640)
     parser.add_argument("--image-height", type=int, default=640)
     parser.add_argument("--model", default=None, help="path to a trained models/slot_classifier.joblib (optional)")
+    parser.add_argument("--yolo-model", default=None,
+                         help="path to a trained models/yolov8_seg_slots.pt (optional, overrides --model)")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     classifier = slot_classifier.load(args.model) if args.model else None
+    yolo_model = yolo_slot_detector.load(args.yolo_model) if args.yolo_model else None
     slots, needs_review = generate_config(args.camera_id, args.frames_dir, args.output, args.cx, args.cy, args.f,
-                                           args.radius, args.image_width, args.image_height, classifier)
+                                           args.radius, args.image_width, args.image_height, classifier, yolo_model)
     status = "REVIEW RECOMMENDED (low confidence or no slots found)" if needs_review else "ok"
     print(f"{args.camera_id}: detected {len(slots)} slot(s) -> {args.output} [{status}]")
 
