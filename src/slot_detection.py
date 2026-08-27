@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 
 from calibration import LocalView
+from slot_classifier import crop_polygon, extract_features
 
 
 def median_stack(image_paths):
@@ -93,12 +94,19 @@ def _shrink_polygon(poly, inset_px=6.0):
 
 
 def detect_slots(median_bgr, calibration, min_area=2800, max_area=9500, min_rectangularity=0.65, inset_px=6.0,
-                  floor_radius=300):
+                  floor_radius=300, classifier=None):
     """Find candidate parking-slot polygons in a camera's median-stacked reference image.
 
     Returns a list of {"polygon": [[x, y] x4], "confidence": float}, confidence
     being the fitted quad's fill ratio (rectangularity) against its own
     contour area -- a cheap, unitless quality signal, not a trained score.
+
+    classifier: optional trained model (see slot_classifier.train) fit on
+    human accept/reject review feedback. When given, any candidate that
+    passes every geometric/color filter below is additionally cropped and
+    run through the classifier; a "reject" prediction drops it from the
+    results. Default None keeps existing behavior unchanged (opt-in, same
+    pattern as the old require_studs parameter).
 
     ponytail: min_area/max_area are pixel-unit thresholds tuned for this
     project's f=204/radius=320 camera model. Known false-positive class: a
@@ -142,5 +150,12 @@ def detect_slots(median_bgr, calibration, min_area=2800, max_area=9500, min_rect
             continue
         poly = approx.reshape(-1, 2) if len(approx) == 4 else cv2.boxPoints(rect)
         poly = _shrink_polygon(poly, inset_px)
-        results.append({"polygon": poly.tolist(), "confidence": round(float(min(rectangularity, 1.0)), 3)})
+        confidence = round(float(min(rectangularity, 1.0)), 3)
+
+        if classifier is not None:
+            crop = crop_polygon(median_bgr, poly)
+            if crop.size == 0 or classifier.predict([extract_features(crop, confidence)])[0] == 0:
+                continue
+
+        results.append({"polygon": poly.tolist(), "confidence": confidence})
     return results

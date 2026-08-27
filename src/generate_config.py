@@ -2,25 +2,51 @@ import argparse
 import glob
 from pathlib import Path
 
+import cv2
+
+import review_store
+import slot_classifier
 from calibration import CalibrationModel
 from parking_slot import SlotConfig
+from slot_classifier import crop_polygon
 from slot_detection import median_stack, detect_slots
 
 DEFAULT_LABEL_SPEC = {"shape": "rect", "color": [235, 206, 135], "alpha": 1.0, "text": None, "border_width": 3}
 REVIEW_CONFIDENCE_THRESHOLD = 0.75
 
 IMAGE_EXTENSIONS = ("*.jpg", "*.jpeg", "*.png")
+CROPS_DIR = review_store.CROPS_DIR
+
+
+def _save_review_candidates(camera_id, image_path, median, detections):
+    # ponytail: crops are saved as real files (not just a path reference) so
+    # review/training data survives the raw frame folder later disappearing
+    # or changing -- see the review-feedback-classifier design doc.
+    CROPS_DIR.mkdir(parents=True, exist_ok=True)
+    for d in detections:
+        cid = review_store.candidate_id(camera_id, d["polygon"])
+        crop_path = CROPS_DIR / f"{cid}.png"
+        cv2.imwrite(str(crop_path), crop_polygon(median, d["polygon"]))
+        review_store.append_candidate({
+            "id": cid,
+            "camera_id": camera_id,
+            "image_path": str(Path(image_path).resolve()),
+            "polygon": d["polygon"],
+            "crop_path": str(crop_path),
+            "confidence": d["confidence"],
+        })
 
 
 def generate_config(camera_id, frames_dir, output_path, cx=320.0, cy=320.0, f=204.0, radius=320.0,
-                     image_width=640, image_height=640):
+                     image_width=640, image_height=640, classifier=None):
     image_paths = sorted({p for pattern in IMAGE_EXTENSIONS for p in glob.glob(str(Path(frames_dir) / pattern))})
     if not image_paths:
         raise ValueError(f"no frames found in {frames_dir}")
 
     median = median_stack(image_paths)
     calibration = CalibrationModel(cx=cx, cy=cy, f=f, radius=radius)
-    detections = detect_slots(median, calibration)
+    detections = detect_slots(median, calibration, classifier=classifier)
+    _save_review_candidates(camera_id, image_paths[0], median, detections)
 
     slots = [{"id": f"slot-{i}", "polygon_raw": d["polygon"]} for i, d in enumerate(detections)]
     config = SlotConfig(camera_id, image_width, image_height, calibration, slots, DEFAULT_LABEL_SPEC)
@@ -42,13 +68,15 @@ def build_parser():
     parser.add_argument("--radius", type=float, default=320.0)
     parser.add_argument("--image-width", type=int, default=640)
     parser.add_argument("--image-height", type=int, default=640)
+    parser.add_argument("--model", default=None, help="path to a trained models/slot_classifier.joblib (optional)")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    classifier = slot_classifier.load(args.model) if args.model else None
     slots, needs_review = generate_config(args.camera_id, args.frames_dir, args.output, args.cx, args.cy, args.f,
-                                           args.radius, args.image_width, args.image_height)
+                                           args.radius, args.image_width, args.image_height, classifier)
     status = "REVIEW RECOMMENDED (low confidence or no slots found)" if needs_review else "ok"
     print(f"{args.camera_id}: detected {len(slots)} slot(s) -> {args.output} [{status}]")
 
