@@ -4,6 +4,8 @@ import shutil
 import zipfile
 from pathlib import Path
 
+import pytest
+
 import app as flask_app_module
 import storage
 
@@ -122,15 +124,43 @@ def test_adjust_label_updates_override(tmp_path, monkeypatch):
     batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
     client = _client()
 
+    # Build a patch_box (raw patch pixel corners) that should round-trip back to
+    # pipeline's known-good fixed label box (cx=cy=0.5, w=h=0.68), proving the
+    # backend's pixel->plane conversion (perspective.pixel_to_plane_points) uses
+    # the same homography pipeline.run_auto_all uses to interpret adjusted_slots.
+    import pipeline
+    import perspective
+    from parking_slot import SlotConfig
+    import storage as storage_module
+
+    config_path = storage_module.PROJECT_ROOT / "config" / f"{SAMPLE_CAMERA}.json"
+    config = SlotConfig.load(str(config_path))
+    slot = next(s for s in config.slots if s["id"] == "slot-0")
+    _, homography = pipeline._prepare_slot_view(config, slot, "slot-0")
+
+    cx, cy, w, h = 0.5, 0.5, 0.68, 0.68
+    corners = perspective.plane_points_to_pixel(homography, [
+        [cx - w / 2, cy - h / 2],
+        [cx + w / 2, cy + h / 2],
+    ])
+    (x0, y0), (x1, y1) = corners
+
     response = client.post(
         f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}/labels/slot-0",
-        json={"action": "adjust", "box": {"cx": 0.4, "cy": 0.4, "w": 0.5, "h": 0.5}},
+        json={
+            "action": "adjust",
+            "patch_box": {"x0": float(x0), "y0": float(y0), "x1": float(x1), "y1": float(y1)},
+        },
     )
 
     assert response.status_code == 200
     import overrides
     override = overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)
-    assert override["adjusted"]["slot-0"] == {"cx": 0.4, "cy": 0.4, "w": 0.5, "h": 0.5}
+    box = override["adjusted"]["slot-0"]
+    assert box["cx"] == pytest.approx(0.5, abs=0.01)
+    assert box["cy"] == pytest.approx(0.5, abs=0.01)
+    assert box["w"] == pytest.approx(0.68, abs=0.01)
+    assert box["h"] == pytest.approx(0.68, abs=0.01)
 
 
 def test_edit_label_unknown_camera_returns_json_404(tmp_path, monkeypatch):

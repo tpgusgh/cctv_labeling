@@ -10,6 +10,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory, Respo
 
 import jobs
 import overrides
+import perspective
 import pipeline
 import review_store
 import storage
@@ -163,7 +164,24 @@ def edit_label(batch_id, camera_id, photo, slot_id):
         overrides.exclude_slot(batch_id, camera_id, photo, slot_id)
         _flag_web_reject(camera_id, slot_id)
     elif action == "adjust":
-        overrides.adjust_slot(batch_id, camera_id, photo, slot_id, payload["box"])
+        config = SlotConfig.load(str(config_path))
+        slot = next((s for s in config.slots if s["id"] == slot_id), None)
+        if slot is None:
+            return jsonify({"error": "slot not found"}), 404
+        view, homography = pipeline._prepare_slot_view(config, slot, slot_id)
+        patch_box = payload["patch_box"]
+        plane_pts = perspective.pixel_to_plane_points(homography, [
+            [patch_box["x0"], patch_box["y0"]],
+            [patch_box["x1"], patch_box["y1"]],
+        ])
+        (px0, py0), (px1, py1) = plane_pts
+        box = {
+            "cx": float((px0 + px1) / 2),
+            "cy": float((py0 + py1) / 2),
+            "w": float(abs(px1 - px0)),
+            "h": float(abs(py1 - py0)),
+        }
+        overrides.adjust_slot(batch_id, camera_id, photo, slot_id, box)
     else:
         return jsonify({"error": "action must be 'delete' or 'adjust'"}), 400
 
