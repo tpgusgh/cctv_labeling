@@ -2,12 +2,27 @@ import argparse
 import shutil
 from pathlib import Path
 
+import torch
 from ultralytics import YOLO
 
 
-def train(data_yaml, base_model="yolov8n-seg.pt", epochs=100):
+def _auto_device():
+    # ponytail: ultralytics does NOT auto-select MPS (Apple Silicon) even
+    # when available -- its own device selector defaults to CPU unless a
+    # device is passed explicitly (verified: select_device("") -> "cpu" on
+    # this machine despite torch.backends.mps.is_available() == True).
+    # CUDA IS auto-selected by ultralytics already, but picking it here too
+    # keeps this function's result meaningful on either platform.
+    if torch.cuda.is_available():
+        return 0
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def train(data_yaml, base_model="yolov8n-seg.pt", epochs=100, device=None):
     model = YOLO(base_model)
-    model.train(data=data_yaml, epochs=epochs, single_cls=True)
+    model.train(data=data_yaml, epochs=epochs, single_cls=True, device=device or _auto_device())
     return model
 
 
@@ -31,12 +46,15 @@ def build_parser():
     parser.add_argument("--base-model", default="yolov8n-seg.pt")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--output", default="models/yolov8_seg_slots.pt")
+    parser.add_argument("--device", default=None,
+                         help="torch device (0 for first CUDA GPU, 'mps', 'cpu'). "
+                              "Default: auto-detect best available.")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    model = train(args.data, args.base_model, args.epochs)
+    model = train(args.data, args.base_model, args.epochs, args.device)
     _save_checkpoint(model, args.output)
     print(f"trained -> {args.output}")
 
