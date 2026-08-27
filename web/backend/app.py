@@ -3,10 +3,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
-from flask import Flask, jsonify, request
+import cv2
+from flask import Flask, jsonify, request, send_file, Response
 
 import jobs
+import overrides
+import pipeline
+import review_store
 import storage
+from parking_slot import SlotConfig
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
@@ -50,6 +56,109 @@ def batch_status(batch_id):
     if not statuses:
         return jsonify({"error": "unknown batch_id"}), 404
     return jsonify({"cameras": statuses})
+
+
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
+
+
+def _find_raw_photo(batch_id, camera_id, photo):
+    upload_dir = storage.camera_upload_dir(batch_id, camera_id)
+    for ext in IMAGE_EXTENSIONS:
+        candidate = upload_dir / f"{photo}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+@app.get("/api/batches/<batch_id>/cameras/<camera_id>/photos")
+def list_photos(batch_id, camera_id):
+    labeled_dir = storage.labeled_dir(batch_id, camera_id)
+    if not labeled_dir.exists():
+        return jsonify({"photos": []})
+    photos = []
+    for p in sorted(labeled_dir.glob("*.png")):
+        override = overrides.load_override(batch_id, camera_id, p.stem)
+        photos.append({
+            "photo": p.stem,
+            "excluded_slots": override["excluded_slots"],
+            "adjusted": override["adjusted"],
+        })
+    return jsonify({"photos": photos})
+
+
+@app.get("/api/batches/<batch_id>/cameras/<camera_id>/photos/<photo>.png")
+def get_photo(batch_id, camera_id, photo):
+    path = storage.labeled_dir(batch_id, camera_id) / f"{photo}.png"
+    if not path.is_file():
+        return jsonify({"error": "not found"}), 404
+    return send_file(str(path), mimetype="image/png")
+
+
+@app.get("/api/batches/<batch_id>/cameras/<camera_id>/photos/<photo>/slots/<slot_id>/patch.png")
+def get_slot_patch(batch_id, camera_id, photo, slot_id):
+    config_path = storage.PROJECT_ROOT / "config" / f"{camera_id}.json"
+    if not config_path.exists():
+        return jsonify({"error": "camera not found"}), 404
+    config = SlotConfig.load(str(config_path))
+    slot = next((s for s in config.slots if s["id"] == slot_id), None)
+    if slot is None:
+        return jsonify({"error": "slot not found"}), 404
+
+    raw_path = _find_raw_photo(batch_id, camera_id, photo)
+    if raw_path is None:
+        return jsonify({"error": "photo not found"}), 404
+
+    raw = cv2.imread(str(raw_path))
+    view, _ = pipeline._prepare_slot_view(config, slot, slot_id)
+    patch = view.rectify(raw)
+    ok, encoded = cv2.imencode(".png", patch)
+    if not ok:
+        return jsonify({"error": "encode failed"}), 500
+    return Response(encoded.tobytes(), mimetype="image/png")
+
+
+def _rerender_photo(batch_id, camera_id, photo):
+    config_path = storage.PROJECT_ROOT / "config" / f"{camera_id}.json"
+    raw_path = _find_raw_photo(batch_id, camera_id, photo)
+    override = overrides.load_override(batch_id, camera_id, photo)
+    output_path = storage.labeled_dir(batch_id, camera_id) / f"{photo}.png"
+    pipeline.run_auto_all(
+        str(config_path), str(raw_path), str(output_path),
+        excluded_slots=set(override["excluded_slots"]),
+        adjusted_slots=override["adjusted"],
+    )
+
+
+def _flag_web_reject(camera_id, slot_id):
+    config_path = storage.PROJECT_ROOT / "config" / f"{camera_id}.json"
+    config = SlotConfig.load(str(config_path))
+    slot = next((s for s in config.slots if s["id"] == slot_id), None)
+    if slot is None:
+        return
+    record = {
+        "id": review_store.candidate_id(camera_id, slot["polygon_raw"]),
+        "camera_id": camera_id,
+        "slot_id": slot_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    review_store.append_web_flag(record)
+
+
+@app.post("/api/batches/<batch_id>/cameras/<camera_id>/photos/<photo>/labels/<slot_id>")
+def edit_label(batch_id, camera_id, photo, slot_id):
+    payload = request.get_json(force=True)
+    action = payload.get("action")
+
+    if action == "delete":
+        overrides.exclude_slot(batch_id, camera_id, photo, slot_id)
+        _flag_web_reject(camera_id, slot_id)
+    elif action == "adjust":
+        overrides.adjust_slot(batch_id, camera_id, photo, slot_id, payload["box"])
+    else:
+        return jsonify({"error": "action must be 'delete' or 'adjust'"}), 400
+
+    _rerender_photo(batch_id, camera_id, photo)
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
