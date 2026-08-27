@@ -28,11 +28,12 @@ function SlotAdjustModal({ batchId, cameraId, photo, slotId, onClose, onSaved })
   }
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-      <div style={{ background: 'white', padding: 16 }}>
-        <p>{slotId} 위치/크기를 드래그로 지정하세요 (사각형 하나 그리면 자동 저장)</p>
+    <div className="modal-overlay">
+      <div className="modal-box">
+        <p className="eyebrow">{slotId} · ADJUST</p>
+        <p className="hint">위치/크기를 드래그로 지정하세요 (사각형 하나 그리면 자동 저장)</p>
         <div
-          style={{ position: 'relative', width: PATCH_SIZE, height: PATCH_SIZE, cursor: 'crosshair' }}
+          style={{ position: 'relative', width: PATCH_SIZE, height: PATCH_SIZE, cursor: 'crosshair', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -49,7 +50,8 @@ function SlotAdjustModal({ batchId, cameraId, photo, slotId, onClose, onSaved })
             <div
               style={{
                 position: 'absolute',
-                border: '2px solid orange',
+                border: '2px solid var(--accent-cyan)',
+                background: 'rgba(79, 209, 219, 0.15)',
                 left: Math.min(drag.x0, drag.x1),
                 top: Math.min(drag.y0, drag.y1),
                 width: Math.abs(drag.x1 - drag.x0),
@@ -58,7 +60,7 @@ function SlotAdjustModal({ batchId, cameraId, photo, slotId, onClose, onSaved })
             />
           )}
         </div>
-        <button onClick={onClose}>닫기</button>
+        <p style={{ marginTop: 14 }}><button className="btn" onClick={onClose}>닫기</button></p>
       </div>
     </div>
   )
@@ -73,16 +75,18 @@ function PhotoCard({ batchId, cameraId, photo, onChanged }) {
   }
 
   return (
-    <div style={{ border: '1px solid #ccc', padding: 8, margin: 8, display: 'inline-block', verticalAlign: 'top' }}>
+    <div className="photo-card">
       <img src={photoUrl(batchId, cameraId, photo.photo)} width={240} alt={photo.photo} />
-      <div>{photo.photo}</div>
-      <table>
+      <div className="photo-name">{photo.photo}</div>
+      <table className="slot-table">
         <tbody>
           {photo.slot_ids.map((slotId) => (
             <tr key={slotId}>
-              <td>{slotId}{photo.excluded_slots.includes(slotId) ? ' (삭제됨)' : ''}</td>
-              <td><button onClick={() => handleDelete(slotId)}>삭제</button></td>
-              <td><button onClick={() => setEditingSlot(slotId)}>수정</button></td>
+              <td className={photo.excluded_slots.includes(slotId) ? 'slot-excluded' : ''}>
+                {slotId}{photo.excluded_slots.includes(slotId) ? ' · 삭제됨' : ''}
+              </td>
+              <td><button className="btn btn-danger" onClick={() => handleDelete(slotId)}>삭제</button></td>
+              <td><button className="btn" onClick={() => setEditingSlot(slotId)}>수정</button></td>
             </tr>
           ))}
         </tbody>
@@ -119,16 +123,21 @@ export default function ResultsPage({ batchId, cameras }) {
 
   return (
     <div>
-      <h2>결과</h2>
-      <select value={cameraId} onChange={(e) => setCameraId(e.target.value)}>
-        {cameras.map((c) => (
-          <option key={c.camera_id} value={c.camera_id}>{c.camera_id}</option>
-        ))}
-      </select>
-      {' '}
-      <a href={downloadCameraUrl(batchId, cameraId)}>이 카메라 다운로드</a>
-      {' | '}
-      <a href={downloadBatchUrl(batchId)}>전체 다운로드</a>
+      <p className="eyebrow">03 · RESULTS</p>
+      <div className="panel" style={{ marginBottom: 20 }}>
+        <h2>결과 확인</h2>
+        <p className="hint">카메라를 선택해서 사진별 라벨을 확인하고, 필요하면 슬롯 단위로 삭제·수정하세요.</p>
+        <select value={cameraId} onChange={(e) => setCameraId(e.target.value)}>
+          {cameras.map((c) => (
+            <option key={c.camera_id} value={c.camera_id}>{c.camera_id}</option>
+          ))}
+        </select>
+        <div className="link-row" style={{ marginTop: 12 }}>
+          <a href={downloadCameraUrl(batchId, cameraId)}>이 카메라 다운로드</a>
+          {' · '}
+          <a href={downloadBatchUrl(batchId)}>전체 다운로드</a>
+        </div>
+      </div>
       <div>
         {photos.map((p) => (
           <PhotoCard key={p.photo} batchId={batchId} cameraId={cameraId} photo={p} onChanged={refresh} />

@@ -24,14 +24,18 @@ export default function ProgressPage({ batchId, cameras, onAllDone }) {
 
   return (
     <div>
-      <h2>처리 중...</h2>
-      <ul>
+      <p className="eyebrow">02 · PROCESSING</p>
+      <div className="panel">
+        <h2>카메라별 처리 현황</h2>
+        <p className="hint">새 카메라는 슬롯 탐지 후 라벨링, 기존 카메라는 바로 라벨링됩니다.</p>
         {statuses.map((c) => (
-          <li key={c.camera_id}>
-            {c.camera_id}: {c.status} ({c.photo_count}장){c.error ? ` - ${c.error}` : ''}
-          </li>
+          <div className="status-line" key={c.camera_id}>
+            <span>{c.camera_id} <span style={{ color: 'var(--text-muted)' }}>({c.photo_count}장)</span></span>
+            <span className={`status-badge status-${c.status}`}>{c.status}</span>
+            {c.error && <span className="error-text">{c.error}</span>}
+          </div>
         ))}
-      </ul>
+      </div>
     </div>
   )
 }

@@ -16,9 +16,25 @@ export default function App() {
     setStage('results')
   }
 
+  const steps = [
+    { key: 'upload', label: '01 UPLOAD' },
+    { key: 'progress', label: '02 PROCESS' },
+    { key: 'results', label: '03 RESULTS' },
+  ]
+
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto', padding: 16, fontFamily: 'sans-serif' }}>
-      <h1>CCTV 라벨링</h1>
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-title-row">
+          <h1 className="app-title">CCTV LABELING</h1>
+          <span className="app-live"><span className="app-live-dot" />LIVE</span>
+        </div>
+        <nav className="app-stepper">
+          {steps.map((s) => (
+            <span key={s.key} className={stage === s.key ? 'active' : ''}>{s.label}</span>
+          ))}
+        </nav>
+      </header>
       {stage === 'upload' && <UploadPage onUploaded={handleUploaded} />}
       {stage === 'progress' && batch && (
         <ProgressPage batchId={batch.batch_id} cameras={batch.cameras} onAllDone={handleAllDone} />
