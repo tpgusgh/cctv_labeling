@@ -131,6 +131,32 @@ def test_adjust_label_updates_override(tmp_path, monkeypatch):
     assert override["adjusted"]["slot-0"] == {"cx": 0.4, "cy": 0.4, "w": 0.5, "h": 0.5}
 
 
+def test_edit_label_unknown_camera_returns_json_404(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "WEB_UPLOADS_DIR", tmp_path)
+    client = _client()
+
+    response = client.post(
+        "/api/batches/batchX/cameras/no-such-camera/photos/somephoto/labels/slot-0",
+        json={"action": "delete"},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]
+
+
+def test_edit_label_missing_raw_photo_returns_json_404(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.post(
+        f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/no-such-photo/labels/slot-0",
+        json={"action": "delete"},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]
+
+
 def test_get_slot_patch_returns_image_bytes(tmp_path, monkeypatch):
     batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
     client = _client()
