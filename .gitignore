@@ -19,3 +19,4 @@ venv/
 *.pt
 *.onnx
 /models/*/weights/
+models/*.joblib
