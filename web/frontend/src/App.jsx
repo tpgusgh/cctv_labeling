@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import UploadPage from './UploadPage.jsx'
 import ProgressPage from './ProgressPage.jsx'
+import ResultsPage from './ResultsPage.jsx'
 
 export default function App() {
   const [batch, setBatch] = useState(null)
@@ -22,7 +23,7 @@ export default function App() {
       {stage === 'progress' && batch && (
         <ProgressPage batchId={batch.batch_id} cameras={batch.cameras} onAllDone={handleAllDone} />
       )}
-      {stage === 'results' && batch && <p>결과 화면 (다음 작업에서 추가)</p>}
+      {stage === 'results' && batch && <ResultsPage batchId={batch.batch_id} cameras={batch.cameras} />}
     </div>
   )
 }
