@@ -46,12 +46,20 @@ def test_export_dataset_replicates_camera_polygons_across_all_its_frames(tmp_pat
     # camA is index 0 of sorted(["camA", "camB"]) -> val; camB -> train
     assert summary["val_cameras"] == ["camA"]
     assert summary["train_cameras"] == ["camB"]
-    assert summary["val_images"] == 2  # camA has 2 frames
-    assert summary["train_images"] == 1  # camB has 1 frame
+    assert summary["val_images"] == 3  # camA: 2 frames + 1 median composite
+    assert summary["train_images"] == 2  # camB: 1 frame + 1 median composite
 
     assert (output_dir / "images" / "val" / "camA__frame1.jpg").exists()
     assert (output_dir / "images" / "val" / "camA__frame2.jpg").exists()
     assert (output_dir / "images" / "train" / "camB__frame1.jpg").exists()
+
+    # median-stack composite is included too, since that's what
+    # generate_config.py actually runs inference on -- not just raw frames.
+    assert (output_dir / "images" / "val" / "camA__median.jpg").exists()
+    assert (output_dir / "images" / "train" / "camB__median.jpg").exists()
+    median_label = (output_dir / "labels" / "val" / "camA__median.txt").read_text().strip()
+    parts = [float(x) for x in median_label.split()]
+    assert parts[1:] == pytest.approx([0.0, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5])
 
     # camA's accept polygon [[0,0],[10,0],[10,10],[0,10]] on a 20x20 image
     # normalizes to (0,0) (0.5,0) (0.5,0.5) (0,0.5); the reject polygon must

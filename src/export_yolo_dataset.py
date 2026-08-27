@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 
 import review_store
+from slot_detection import median_stack
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
@@ -72,6 +73,18 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
 
                 dest_name = f"{camera_id}__{frame_path.stem}"
                 shutil.copy2(frame_path, images_dir / f"{dest_name}{frame_path.suffix}")
+                _write_label_file(labels_dir / f"{dest_name}.txt", polygons, width, height)
+                summary[f"{split}_images"] += 1
+
+            # Inference (generate_config.py) runs on the median-stacked
+            # composite of a camera's frames, not on raw frames -- without
+            # this, the model never sees the image type it's actually run
+            # on at inference time (train/inference domain mismatch).
+            if frame_paths:
+                median = median_stack(frame_paths)
+                height, width = median.shape[:2]
+                dest_name = f"{camera_id}__median"
+                cv2.imwrite(str(images_dir / f"{dest_name}.jpg"), median)
                 _write_label_file(labels_dir / f"{dest_name}.txt", polygons, width, height)
                 summary[f"{split}_images"] += 1
 
