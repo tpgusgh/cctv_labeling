@@ -729,7 +729,7 @@ def batch_status(batch_id):
 
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run(port=5050)
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -1155,7 +1155,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  server: { proxy: { '/api': 'http://localhost:5000' } },
+  server: { proxy: { '/api': 'http://localhost:5050' } },
 })
 ```
 
@@ -1639,7 +1639,7 @@ if [ ! -d "web/frontend/dist" ]; then
   (cd web/frontend && npm install && npm run build)
 fi
 
-echo "starting server on http://localhost:5000"
+echo "starting server on http://localhost:5050"
 .venv/bin/python web/backend/app.py
 ```
 
@@ -1661,10 +1661,10 @@ Expected: all tests pass (existing `tests/` suite plus `web/backend/tests/`)
 ```bash
 ./run_web.sh &
 sleep 3
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5000/
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5050/
 kill %1
 ```
-Expected: `200`. Then open `http://localhost:5000` in a browser directly (single port, no separate dev server this time), upload a real camera folder from `no_label/`, and confirm the whole upload → progress → results → delete/adjust → download flow works end to end exactly as in Task 10's manual check, but through the single production-style launcher.
+Expected: `200`. Then open `http://localhost:5050` in a browser directly (single port, no separate dev server this time), upload a real camera folder from `no_label/`, and confirm the whole upload → progress → results → delete/adjust → download flow works end to end exactly as in Task 10's manual check, but through the single production-style launcher.
 
 - [ ] **Step 5: Commit**
 

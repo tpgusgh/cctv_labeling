@@ -72,7 +72,10 @@ def run(config_path, raw_image_path, slot_id, candidate_point, output_path):
     return final
 
 
-def run_auto_all(config_path, raw_image_path, output_path):
+def run_auto_all(config_path, raw_image_path, output_path, excluded_slots=None, adjusted_slots=None):
+    excluded_slots = set(excluded_slots or ())
+    adjusted_slots = adjusted_slots or {}
+
     config = SlotConfig.load(config_path)
 
     raw = cv2.imread(raw_image_path)
@@ -83,13 +86,23 @@ def run_auto_all(config_path, raw_image_path, output_path):
     results = {}
     for slot in config.slots:
         slot_id = slot["id"]
+        if slot_id in excluded_slots:
+            results[slot_id] = "excluded"
+            continue
         try:
             view, homography = _prepare_slot_view(config, slot, slot_id)
             label_spec = dict(config.label_spec)
-            label_spec.setdefault("width", FIXED_LABEL_WIDTH)
-            label_spec.setdefault("height", FIXED_LABEL_HEIGHT)
+            box = adjusted_slots.get(slot_id)
+            if box:
+                candidate_point = (box["cx"], box["cy"])
+                label_spec["width"] = box["w"]
+                label_spec["height"] = box["h"]
+            else:
+                candidate_point = FIXED_CANDIDATE_POINT
+                label_spec.setdefault("width", FIXED_LABEL_WIDTH)
+                label_spec.setdefault("height", FIXED_LABEL_HEIGHT)
             local_patch = view.rectify(result_image)
-            composited_local = render_label(local_patch, homography, FIXED_CANDIDATE_POINT, label_spec)
+            composited_local = render_label(local_patch, homography, candidate_point, label_spec)
             result_image = view.unrectify_into(composited_local, result_image)
             results[slot_id] = "labeled"
         except (ValueError, cv2.error) as e:

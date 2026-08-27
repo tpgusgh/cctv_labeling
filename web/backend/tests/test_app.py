@@ -1,0 +1,229 @@
+import io
+import io as io_module
+import shutil
+import zipfile
+from pathlib import Path
+
+import pytest
+
+import app as flask_app_module
+import storage
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+SAMPLE_CAMERA = "P1_B1_1_9"
+SAMPLE_PHOTO = REPO_ROOT / "no_label" / SAMPLE_CAMERA / "20260820_030004.jpg"
+
+
+def _client():
+    flask_app_module.app.testing = True
+    return flask_app_module.app.test_client()
+
+
+def _seed_labeled_photo(tmp_path, monkeypatch, batch_id="batchX"):
+    monkeypatch.setattr(storage, "WEB_UPLOADS_DIR", tmp_path)
+    upload_dir = storage.camera_upload_dir(batch_id, SAMPLE_CAMERA)
+    upload_dir.mkdir(parents=True)
+    shutil.copy(SAMPLE_PHOTO, upload_dir / SAMPLE_PHOTO.name)
+
+    import jobs
+    job_id = jobs.submit_camera_job(batch_id, SAMPLE_CAMERA, upload_dir, photo_count=1)
+    jobs.wait_for_job(job_id, timeout=30)
+    return batch_id, SAMPLE_PHOTO.stem
+
+
+def test_upload_rejects_when_no_files():
+    client = _client()
+    response = client.post("/api/upload", data={})
+    assert response.status_code == 400
+
+
+def test_upload_groups_files_by_parent_folder(monkeypatch, tmp_path):
+    import storage
+    monkeypatch.setattr(storage, "WEB_UPLOADS_DIR", tmp_path)
+
+    saved = []
+    monkeypatch.setattr(
+        "jobs.submit_camera_job",
+        lambda batch_id, camera_id, upload_dir, photo_count: saved.append((camera_id, photo_count)) or f"{batch_id}:{camera_id}",
+    )
+
+    client = _client()
+    data = {
+        "files": [
+            (io.BytesIO(b"fake-jpg-1"), "P1_B1_1_9/a.jpg"),
+            (io.BytesIO(b"fake-jpg-2"), "P1_B1_1_9/b.jpg"),
+            (io.BytesIO(b"fake-jpg-3"), "P1_B1_1_1/c.jpg"),
+        ]
+    }
+    response = client.post("/api/upload", data=data, content_type="multipart/form-data")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    camera_ids = {c["camera_id"] for c in body["cameras"]}
+    assert camera_ids == {"P1_B1_1_9", "P1_B1_1_1"}
+    assert set(saved) == {("P1_B1_1_9", 2), ("P1_B1_1_1", 1)}
+
+
+def test_upload_rejects_path_traversal(tmp_path, monkeypatch):
+    import storage
+    monkeypatch.setattr(storage, "WEB_UPLOADS_DIR", tmp_path)
+
+    client = _client()
+    data = {"files": [(io.BytesIO(b"x"), "../../etc/passwd")]}
+    response = client.post("/api/upload", data=data, content_type="multipart/form-data")
+
+    assert response.status_code == 400
+
+
+def test_batch_status_unknown_batch_returns_404():
+    client = _client()
+    response = client.get("/api/batches/does-not-exist/status")
+    assert response.status_code == 404
+
+
+def test_list_photos_returns_seeded_photo(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.get(f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos")
+
+    assert response.status_code == 200
+    photos = response.get_json()["photos"]
+    assert any(p["photo"] == photo_stem for p in photos)
+
+
+def test_get_photo_png_returns_image_bytes(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.get(f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}.png")
+
+    assert response.status_code == 200
+    assert response.data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_delete_label_excludes_slot_and_flags_review(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    import functools
+    import review_store
+    flags_path = tmp_path / "web_flags.jsonl"
+    monkeypatch.setattr(
+        review_store, "append_web_flag",
+        functools.partial(review_store.append_web_flag, path=flags_path),
+    )
+
+    response = client.post(
+        f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}/labels/slot-0",
+        json={"action": "delete"},
+    )
+
+    assert response.status_code == 200
+    import overrides
+    assert overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)["excluded_slots"] == ["slot-0"]
+
+    flags = review_store.load_web_flags(flags_path)
+    assert any(f["camera_id"] == SAMPLE_CAMERA and f["slot_id"] == "slot-0" and f["photo"] == photo_stem for f in flags)
+
+
+def test_adjust_label_updates_override(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    # Build a patch_box (raw patch pixel corners) that should round-trip back to
+    # pipeline's known-good fixed label box (cx=cy=0.5, w=h=0.68), proving the
+    # backend's pixel->plane conversion (perspective.pixel_to_plane_points) uses
+    # the same homography pipeline.run_auto_all uses to interpret adjusted_slots.
+    import pipeline
+    import perspective
+    from parking_slot import SlotConfig
+    import storage as storage_module
+
+    config_path = storage_module.PROJECT_ROOT / "config" / f"{SAMPLE_CAMERA}.json"
+    config = SlotConfig.load(str(config_path))
+    slot = next(s for s in config.slots if s["id"] == "slot-0")
+    _, homography = pipeline._prepare_slot_view(config, slot, "slot-0")
+
+    cx, cy, w, h = 0.5, 0.5, 0.68, 0.68
+    corners = perspective.plane_points_to_pixel(homography, [
+        [cx - w / 2, cy - h / 2],
+        [cx + w / 2, cy + h / 2],
+    ])
+    (x0, y0), (x1, y1) = corners
+
+    response = client.post(
+        f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}/labels/slot-0",
+        json={
+            "action": "adjust",
+            "patch_box": {"x0": float(x0), "y0": float(y0), "x1": float(x1), "y1": float(y1)},
+        },
+    )
+
+    assert response.status_code == 200
+    import overrides
+    override = overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)
+    box = override["adjusted"]["slot-0"]
+    assert box["cx"] == pytest.approx(0.5, abs=0.01)
+    assert box["cy"] == pytest.approx(0.5, abs=0.01)
+    assert box["w"] == pytest.approx(0.68, abs=0.01)
+    assert box["h"] == pytest.approx(0.68, abs=0.01)
+
+
+def test_edit_label_unknown_camera_returns_json_404(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "WEB_UPLOADS_DIR", tmp_path)
+    client = _client()
+
+    response = client.post(
+        "/api/batches/batchX/cameras/no-such-camera/photos/somephoto/labels/slot-0",
+        json={"action": "delete"},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]
+
+
+def test_edit_label_missing_raw_photo_returns_json_404(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.post(
+        f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/no-such-photo/labels/slot-0",
+        json={"action": "delete"},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]
+
+
+def test_get_slot_patch_returns_image_bytes(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.get(
+        f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}/slots/slot-0/patch.png")
+
+    assert response.status_code == 200
+    assert response.data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_download_camera_returns_zip_with_labeled_photo(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.get(f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/download")
+
+    assert response.status_code == 200
+    zf = zipfile.ZipFile(io_module.BytesIO(response.data))
+    assert f"{photo_stem}.png" in zf.namelist()
+
+
+def test_download_batch_returns_zip_with_camera_subfolder(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+
+    response = client.get(f"/api/batches/{batch_id}/download")
+
+    assert response.status_code == 200
+    zf = zipfile.ZipFile(io_module.BytesIO(response.data))
+    assert f"{SAMPLE_CAMERA}/{photo_stem}.png" in zf.namelist()
