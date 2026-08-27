@@ -171,3 +171,36 @@ def test_run_auto_all_records_error_without_aborting_other_slots(tmp_path):
     assert results["car-slot"].startswith("labeled")
     assert results["bad-slot"].startswith("error:")
     assert output_path.exists()
+
+
+def test_run_auto_all_excludes_requested_slot(tmp_path):
+    config_path = _write_test_config(tmp_path)
+    output_path = str(tmp_path / "excluded.png")
+
+    results = run_auto_all(config_path, SAMPLE_RAW_IMAGE, output_path, excluded_slots={"slot-A"})
+
+    assert results["slot-A"] == "excluded"
+
+
+def test_run_auto_all_applies_adjusted_slot_box(tmp_path):
+    config_path = _write_test_config(tmp_path)
+    output_path = str(tmp_path / "adjusted.png")
+
+    results = run_auto_all(
+        config_path, SAMPLE_RAW_IMAGE, output_path,
+        adjusted_slots={"slot-A": {"cx": 0.3, "cy": 0.3, "w": 0.4, "h": 0.4}},
+    )
+
+    assert results["slot-A"] == "labeled"
+
+
+def test_run_auto_all_defaults_keep_existing_behavior(tmp_path):
+    config_path = _write_test_config(tmp_path)
+    output_path_a = str(tmp_path / "a.png")
+    output_path_b = str(tmp_path / "b.png")
+
+    results_no_override = run_auto_all(config_path, SAMPLE_RAW_IMAGE, output_path_a)
+    results_empty_override = run_auto_all(
+        config_path, SAMPLE_RAW_IMAGE, output_path_b, excluded_slots=set(), adjusted_slots={})
+
+    assert results_no_override == results_empty_override
