@@ -35,9 +35,10 @@ def test_generate_config_uses_yolo_model_when_given(tmp_path, monkeypatch):
         "cam-1", str(frames_dir), str(output_path), yolo_model=sentinel_model)
 
     assert captured["model"] is sentinel_model
-    # generate_config() always builds a calibration -- the yolo path must
-    # get it too, so it can dewarp before inference (see yolo_slot_detector).
-    assert captured["calibration"] is not None
+    # global dewarp was tried and abandoned (see project memory /
+    # docs/superpowers specs) -- generate_config() must NOT pass calibration
+    # to the yolo path right now, production stays raw-image inference.
+    assert captured["calibration"] is None
     assert slots == [{"id": "slot-0", "polygon_raw": fake_polygon}]
     assert needs_review is False
     assert json.loads(output_path.read_text())["camera_id"] == "cam-1"

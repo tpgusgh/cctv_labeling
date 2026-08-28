@@ -47,7 +47,13 @@ def generate_config(camera_id, frames_dir, output_path, cx=320.0, cy=320.0, f=20
     calibration = CalibrationModel(cx=cx, cy=cy, f=f, radius=radius)
     if yolo_model is not None:
         import yolo_slot_detector
-        detections = yolo_slot_detector.detect_slots(median, yolo_model, calibration=calibration)
+        # ponytail: NOT passing calibration here -- global dewarp was tried
+        # and abandoned (see docs/superpowers/specs -- the equidistant
+        # model's tan() singularity sits right where real slot corners are,
+        # verified to blow up training-label coordinates way out of bounds).
+        # yolo_slot_detector.detect_slots() still accepts calibration= for
+        # any future opt-in; production just doesn't pass it right now.
+        detections = yolo_slot_detector.detect_slots(median, yolo_model)
     else:
         detections = detect_slots(median, calibration, classifier=classifier)
     _save_review_candidates(camera_id, image_paths[0], median, detections)

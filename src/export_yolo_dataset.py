@@ -131,14 +131,17 @@ def build_parser():
     parser.add_argument("--cy", type=float, default=320.0)
     parser.add_argument("--f", type=float, default=204.0)
     parser.add_argument("--radius", type=float, default=320.0)
-    parser.add_argument("--no-dewarp", action="store_true",
-                         help="export raw frames/coordinates unchanged instead of globally dewarping")
+    parser.add_argument("--dewarp", action="store_true",
+                         help="globally dewarp frames/coordinates before export instead of exporting raw "
+                              "(tried and abandoned as the default: the equidistant fisheye model's tan() "
+                              "singularity sits right where real slot corners are, blowing labels far out "
+                              "of bounds -- see project memory / docs/superpowers specs before re-enabling)")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    calibration = None if args.no_dewarp else CalibrationModel(cx=args.cx, cy=args.cy, f=args.f, radius=args.radius)
+    calibration = CalibrationModel(cx=args.cx, cy=args.cy, f=args.f, radius=args.radius) if args.dewarp else None
     summary = export_dataset(args.no_label_dir, args.output, args.labels, args.missed, val_every=args.val_every,
                               calibration=calibration)
     print(f"train: {summary['train_images']} images across {len(summary['train_cameras'])} cameras")
