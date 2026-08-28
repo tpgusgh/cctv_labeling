@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import export_yolo_dataset
+from calibration import CalibrationModel
 
 
 def _write_frame(path, size=20):
@@ -114,6 +115,49 @@ def test_export_dataset_rerun_does_not_leak_camera_into_both_splits(tmp_path):
     assert (output_dir / "images" / "val" / "camB__frame1.jpg").exists()
     assert not (output_dir / "images" / "train" / "camB__frame1.jpg").exists()
     assert not (output_dir / "labels" / "train" / "camB__frame1.txt").exists()
+
+
+def test_export_dataset_dewarps_images_and_labels_when_calibration_given(tmp_path):
+    no_label_dir = tmp_path / "no_label"
+    (no_label_dir / "camA").mkdir(parents=True)
+    (no_label_dir / "camB").mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    frame = rng.integers(0, 255, size=(640, 640, 3), dtype=np.uint8)
+    # lossless PNG source so cv2.imread reproduces the exact array below --
+    # a JPEG round-trip would add its own noise on top of the dewarp
+    cv2.imwrite(str(no_label_dir / "camA" / "frame1.png"), frame)
+    cv2.imwrite(str(no_label_dir / "camB" / "frame1.png"), frame)
+
+    polygon = [[420.0, 420.0], [520.0, 420.0], [520.0, 520.0], [420.0, 520.0]]
+    labels_path = tmp_path / "labels.jsonl"
+    _write_jsonl(labels_path, [
+        {"id": "l1", "camera_id": "camA", "decision": "accept", "polygon": polygon},
+        {"id": "l2", "camera_id": "camB", "decision": "accept", "polygon": polygon},
+    ])
+    missed_path = tmp_path / "missed_empty.jsonl"
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
+    output_dir = tmp_path / "dataset"
+    export_yolo_dataset.export_dataset(
+        no_label_dir=no_label_dir, output_dir=output_dir,
+        labels_path=labels_path, missed_path=missed_path, val_every=2, calibration=calibration)
+
+    # image content is actually dewarped, not a raw copy (both source and
+    # export are lossless PNG here, so this can be an exact comparison)
+    dewarped = cv2.imread(str(output_dir / "images" / "val" / "camA__frame1.png"))
+    expected_dewarped = calibration.undistort_image(frame)
+    assert np.array_equal(dewarped, expected_dewarped)
+    assert not np.array_equal(dewarped, frame)
+
+    # label coordinates are the polygon mapped through undistort_points, not raw
+    label_text = (output_dir / "labels" / "val" / "camA__frame1.txt").read_text().strip()
+    parts = [float(x) for x in label_text.split()][1:]
+    expected_polygon = calibration.undistort_points(polygon)
+    height, width = expected_dewarped.shape[:2]
+    expected_norm = []
+    for x, y in expected_polygon:
+        expected_norm += [x / width, y / height]
+    assert parts == pytest.approx(expected_norm, abs=1e-5)
 
 
 def test_export_dataset_raises_when_fewer_than_two_labeled_cameras(tmp_path):

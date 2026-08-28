@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 
 import review_store
+from calibration import CalibrationModel
 from slot_detection import median_stack
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
@@ -31,7 +32,16 @@ def _write_label_file(path, polygons, width, height):
 
 
 def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PATH,
-                    missed_path=review_store.MISSED_PATH, image_extensions=IMAGE_EXTENSIONS, val_every=5):
+                    missed_path=review_store.MISSED_PATH, image_extensions=IMAGE_EXTENSIONS, val_every=5,
+                    calibration=None):
+    """calibration: optional CalibrationModel. Real slot corners in this
+    project's cameras sit mostly near the fisheye edge (median ~78% of the
+    radius out from center), where distortion is worst. When given, every
+    exported image is globally dewarped and every polygon is mapped through
+    calibration.undistort_points() to match -- so training sees the same
+    "flattened" view generate_config.py/yolo_slot_detector.py run inference
+    on when passed the same calibration. Default None exports raw frames/
+    coordinates unchanged (existing behavior)."""
     no_label_dir = Path(no_label_dir)
     output_dir = Path(output_dir)
 
@@ -62,6 +72,8 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
 
         for camera_id in cameras:
             polygons = polygons_by_camera[camera_id]
+            if calibration is not None:
+                polygons = [calibration.undistort_points(p).tolist() for p in polygons]
             frame_paths = sorted(
                 {p for ext in image_extensions for p in glob.glob(str(no_label_dir / camera_id / f"*{ext}"))})
             for frame_path in frame_paths:
@@ -69,10 +81,16 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
                 image = cv2.imread(str(frame_path))
                 if image is None:
                     continue
+                if calibration is not None:
+                    image = calibration.undistort_image(image)
                 height, width = image.shape[:2]
 
                 dest_name = f"{camera_id}__{frame_path.stem}"
-                shutil.copy2(frame_path, images_dir / f"{dest_name}{frame_path.suffix}")
+                dest_path = images_dir / f"{dest_name}{frame_path.suffix}"
+                if calibration is not None:
+                    cv2.imwrite(str(dest_path), image)
+                else:
+                    shutil.copy2(frame_path, dest_path)
                 _write_label_file(labels_dir / f"{dest_name}.txt", polygons, width, height)
                 summary[f"{split}_images"] += 1
 
@@ -82,6 +100,8 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
             # on at inference time (train/inference domain mismatch).
             if frame_paths:
                 median = median_stack(frame_paths)
+                if calibration is not None:
+                    median = calibration.undistort_image(median)
                 height, width = median.shape[:2]
                 dest_name = f"{camera_id}__median"
                 cv2.imwrite(str(images_dir / f"{dest_name}.jpg"), median)
@@ -107,12 +127,20 @@ def build_parser():
     parser.add_argument("--labels", default=str(review_store.LABELS_PATH))
     parser.add_argument("--missed", default=str(review_store.MISSED_PATH))
     parser.add_argument("--val-every", type=int, default=5)
+    parser.add_argument("--cx", type=float, default=320.0)
+    parser.add_argument("--cy", type=float, default=320.0)
+    parser.add_argument("--f", type=float, default=204.0)
+    parser.add_argument("--radius", type=float, default=320.0)
+    parser.add_argument("--no-dewarp", action="store_true",
+                         help="export raw frames/coordinates unchanged instead of globally dewarping")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    summary = export_dataset(args.no_label_dir, args.output, args.labels, args.missed, val_every=args.val_every)
+    calibration = None if args.no_dewarp else CalibrationModel(cx=args.cx, cy=args.cy, f=args.f, radius=args.radius)
+    summary = export_dataset(args.no_label_dir, args.output, args.labels, args.missed, val_every=args.val_every,
+                              calibration=calibration)
     print(f"train: {summary['train_images']} images across {len(summary['train_cameras'])} cameras")
     print(f"val: {summary['val_images']} images across {len(summary['val_cameras'])} cameras")
 

@@ -21,6 +21,9 @@ venv/
 /models/*/weights/
 models/*.joblib
 
+# ultralytics training run artifacts (logs, plots, checkpoints)
+/runs/
+
 # web app runtime data
 /web_uploads/
 /web/frontend/node_modules/

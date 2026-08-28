@@ -43,7 +43,7 @@ def test_submit_camera_job_uses_yolo_model_when_checkpoint_exists(tmp_path, monk
     captured = {}
     monkeypatch.setattr(yolo_slot_detector, "load", lambda path: fake_model)
 
-    def _fake_detect_slots(median_bgr, model, conf=0.25):
+    def _fake_detect_slots(median_bgr, model, conf=0.25, calibration=None):
         captured["model"] = model
         return [{"polygon": [[1.0, 1.0], [10.0, 1.0], [10.0, 10.0], [1.0, 10.0]], "confidence": 0.9}]
 

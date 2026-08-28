@@ -47,7 +47,7 @@ def generate_config(camera_id, frames_dir, output_path, cx=320.0, cy=320.0, f=20
     calibration = CalibrationModel(cx=cx, cy=cy, f=f, radius=radius)
     if yolo_model is not None:
         import yolo_slot_detector
-        detections = yolo_slot_detector.detect_slots(median, yolo_model)
+        detections = yolo_slot_detector.detect_slots(median, yolo_model, calibration=calibration)
     else:
         detections = detect_slots(median, calibration, classifier=classifier)
     _save_review_candidates(camera_id, image_paths[0], median, detections)

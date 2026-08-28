@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 
 import yolo_slot_detector
+from calibration import CalibrationModel
+from slot_detection import fit_quad
 
 
 class _FakeConf:
@@ -65,6 +67,36 @@ def test_detect_slots_returns_empty_list_when_no_masks():
     detections = yolo_slot_detector.detect_slots(np.zeros((100, 150, 3), dtype=np.uint8), model)
 
     assert detections == []
+
+
+def test_detect_slots_dewarps_image_and_redistorts_polygon_when_calibration_given():
+    captured = {}
+
+    class _CapturingModel:
+        def __init__(self, polygon, conf):
+            self._polygon = polygon
+            self._conf = conf
+
+        def predict(self, image, conf, verbose):
+            captured["image"] = image
+            return [_FakeResult([self._polygon], [self._conf])]
+
+    calibration = CalibrationModel(cx=320.0, cy=320.0, f=204.0, radius=320.0)
+    raw_image = np.zeros((640, 640, 3), dtype=np.uint8)
+    # a clean rectangle in the dewarped/rectified image the model "sees"
+    rectified_polygon = np.array([[420, 420], [520, 420], [520, 520], [420, 520]], dtype=np.float32)
+    model = _CapturingModel(rectified_polygon, 0.9)
+
+    detections = yolo_slot_detector.detect_slots(raw_image, model, calibration=calibration)
+
+    # the model must be run on the dewarped image, not the raw fisheye one
+    expected_dewarped = calibration.undistort_image(raw_image)
+    assert np.array_equal(captured["image"], expected_dewarped)
+
+    # the returned polygon must be mapped back into raw pixel space, since
+    # everything downstream (perspective.py, pipeline.py) expects raw coords
+    expected_quad = calibration.distort_points(fit_quad(rectified_polygon, inset_px=6.0))
+    assert np.array(detections[0]["polygon"]) == pytest.approx(expected_quad, abs=1e-6)
 
 
 def test_load_constructs_YOLO_with_given_path(monkeypatch):
