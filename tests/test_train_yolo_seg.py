@@ -16,7 +16,28 @@ def test_train_calls_YOLO_train_with_explicit_device(monkeypatch):
     train_yolo_seg.train("dataset.yaml", base_model="yolov8n-seg.pt", epochs=5, device="cpu")
 
     assert calls["base_model"] == "yolov8n-seg.pt"
-    assert calls["train_kwargs"] == {"data": "dataset.yaml", "epochs": 5, "single_cls": True, "device": "cpu"}
+    assert calls["train_kwargs"] == {
+        "data": "dataset.yaml", "epochs": 5, "single_cls": True, "device": "cpu",
+        "hsv_v": 0.6, "mosaic": 0.0,
+    }
+
+
+def test_train_hsv_v_and_mosaic_are_overridable(monkeypatch):
+    calls = {}
+
+    class _FakeYOLO:
+        def __init__(self, base_model):
+            pass
+
+        def train(self, **kwargs):
+            calls["train_kwargs"] = kwargs
+
+    monkeypatch.setattr(train_yolo_seg, "YOLO", _FakeYOLO)
+
+    train_yolo_seg.train("dataset.yaml", epochs=5, device="cpu", hsv_v=0.3, mosaic=1.0)
+
+    assert calls["train_kwargs"]["hsv_v"] == 0.3
+    assert calls["train_kwargs"]["mosaic"] == 1.0
 
 
 def test_train_auto_detects_device_when_not_given(monkeypatch):
