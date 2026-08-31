@@ -1,0 +1,26 @@
+{
+  "camera_id": "adhoc-0e418e0c-6f26-4fb3-890a-3d816279fd86",
+  "image_width": 4000,
+  "image_height": 2250,
+  "calibration": {
+    "model": "equidistant_1param",
+    "center": [
+      2000.0,
+      1125.0
+    ],
+    "f": 717.1875,
+    "radius": 1125.0
+  },
+  "slots": [],
+  "label_spec": {
+    "shape": "rect",
+    "color": [
+      235,
+      206,
+      135
+    ],
+    "alpha": 1.0,
+    "text": null,
+    "border_width": 3
+  }
+}

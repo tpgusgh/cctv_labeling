@@ -1,0 +1,48 @@
+{
+  "camera_id": "adhoc-26448057-18d8-4cdf-9056-f421e17c8575",
+  "image_width": 640,
+  "image_height": 640,
+  "calibration": {
+    "model": "equidistant_1param",
+    "center": [
+      320.0,
+      320.0
+    ],
+    "f": 204.0,
+    "radius": 320.0
+  },
+  "slots": [
+    {
+      "id": "web-86015bd0",
+      "polygon_raw": [
+        [
+          1720,
+          760.40625
+        ],
+        [
+          1841,
+          760.40625
+        ],
+        [
+          1841,
+          797.40625
+        ],
+        [
+          1720,
+          797.40625
+        ]
+      ]
+    }
+  ],
+  "label_spec": {
+    "shape": "rect",
+    "color": [
+      235,
+      206,
+      135
+    ],
+    "alpha": 1.0,
+    "text": null,
+    "border_width": 3
+  }
+}
