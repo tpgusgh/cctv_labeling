@@ -11,11 +11,40 @@ function boxBounds(boxRaw) {
   return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top }
 }
 
+// 펜툴 자유곡선 -> 슬롯 사각형: 경로 점들의 주성분(PCA) 방향으로 최소
+// 직사각형을 맞춘다. 슬롯 둘레를 대충 따라 긋기만 하면 기울기까지 맞는
+// 사각형이 나온다.
+function fitRectangle(points) {
+  const n = points.length
+  if (n < 3) return null
+  let mx = 0; let my = 0
+  for (const [x, y] of points) { mx += x; my += y }
+  mx /= n; my /= n
+  let sxx = 0; let sxy = 0; let syy = 0
+  for (const [x, y] of points) {
+    const dx = x - mx; const dy = y - my
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy
+  }
+  const angle = 0.5 * Math.atan2(2 * sxy, sxx - syy)
+  const ux = Math.cos(angle); const uy = Math.sin(angle)
+  const vx = -uy; const vy = ux
+  let umin = Infinity; let umax = -Infinity; let vmin = Infinity; let vmax = -Infinity
+  for (const [x, y] of points) {
+    const du = (x - mx) * ux + (y - my) * uy
+    const dv = (x - mx) * vx + (y - my) * vy
+    if (du < umin) umin = du
+    if (du > umax) umax = du
+    if (dv < vmin) vmin = dv
+    if (dv > vmax) vmax = dv
+  }
+  if (umax - umin < 8 || vmax - vmin < 8) return null
+  const corner = (u, v) => [mx + u * ux + v * vx, my + u * uy + v * vy]
+  return [corner(umin, vmin), corner(umax, vmin), corner(umax, vmax), corner(umin, vmax)]
+}
+
 function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
-  // mode: null (idle)
-  //   | {type:'adjust', slotId} -- redrawing an existing slot's label position (drag)
-  //   | {type:'add', points:[[x,y]...]} -- a brand-new slot, 4 clicks like the review app's missed-slot page
-  const [mode, setMode] = useState(null)
+  const [tool, setTool] = useState('select')      // 'select' | 'pen' | 'erase'
+  const [selected, setSelected] = useState(null)  // slot id (select tool)
   const [drag, setDrag] = useState(null)
   const [naturalSize, setNaturalSize] = useState(null)
   const [error, setError] = useState(null)
@@ -23,24 +52,17 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
   // 보이면 안 되므로. 복원하고 싶을 때만 토글로 표시.
   const [showHidden, setShowHidden] = useState(false)
 
-  // window release outside this container (another photo card, the page
-  // background, anywhere) never fired this component's own onMouseUp, so a
-  // drag left `mode`/`drag` stuck forever with no way to recover short of
-  // reloading. A single window-level mouseup listener, driven by refs (so
-  // it always reads the current drag/mode instead of the values from
-  // whenever the listener was attached), ends the drag no matter where the
-  // button comes up.
-  const modeRef = useRef(mode)
-  const dragRef = useRef(drag)
-  modeRef.current = mode
-  dragRef.current = drag
+  // window-level mouseup/keydown read state through refs so they always see
+  // the current values (a drag released outside the container used to stick
+  // forever otherwise).
+  const toolRef = useRef(tool); toolRef.current = tool
+  const selectedRef = useRef(selected); selectedRef.current = selected
+  const dragRef = useRef(drag); dragRef.current = drag
+  const eraseIdsRef = useRef(new Set())
 
   // photoUrl() appends a fresh cache-busting timestamp -- memoized on
-  // `photo` itself (a new object only when refresh() actually re-fetches)
-  // so it doesn't regenerate on every render. Without this, the onLoad
-  // below sets state -> re-render -> new timestamp -> <img> reloads ->
-  // onLoad fires again -> infinite reload loop (verified: was hammering
-  // the backend with GET requests every ~100ms).
+  // `photo` itself so it doesn't regenerate every render (was causing an
+  // infinite <img> reload loop).
   const src = useMemo(() => photoUrl(batchId, cameraId, photo.photo), [batchId, cameraId, photo])
 
   const slots = useMemo(
@@ -48,12 +70,6 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     [photo.slots],
   )
 
-  // real photos here can be much bigger than this project's usual small
-  // camera frames (a 4000x3000 phone photo shown 1:1 is unusably large to
-  // edit) -- scale the display down and convert every coordinate through
-  // the same factor so raw_polygon sent to the backend stays in true
-  // image-pixel space regardless of how small it's shown on screen. Capped
-  // by the viewport too so a narrow window doesn't force horizontal overflow.
   const maxDisplayWidth = typeof window !== 'undefined'
     ? Math.min(BASE_MAX_DISPLAY_WIDTH, window.innerWidth - 48)
     : BASE_MAX_DISPLAY_WIDTH
@@ -62,10 +78,18 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
   const displayH = naturalSize ? naturalSize.h * scale : undefined
   const toRaw = (x, y) => [x / scale, y / scale]
 
+  function slotById(slotId) {
+    return photo.slots.find((s) => s.id === slotId)
+  }
+
+  function displayBounds(slot) {
+    const b = boxBounds(slot.box_raw)
+    return { left: b.left * scale, top: b.top * scale, width: b.width * scale, height: b.height * scale }
+  }
+
   async function sendAdjust(slotId, rawX0, rawY0, rawX1, rawY1, applyAll) {
     try {
-      // applyAll (shift) = 이 위치를 이 슬롯의 기본값으로 저장
-      // (이 카메라의 모든 사진/배치에 적용) -- 사진마다 반복 드래그 불필요.
+      // applyAll (Shift 놓기) = 이 위치를 슬롯 기본값으로 저장 (모든 사진 적용)
       await editLabel(batchId, cameraId, photo.photo, slotId, applyAll ? 'adjust_all' : 'adjust', {
         raw_polygon: [[rawX0, rawY0], [rawX1, rawY1]],
       })
@@ -78,93 +102,149 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     }
   }
 
-  async function finishDrag(applyAll) {
+  async function finishDrag(shiftHeld) {
     const finished = dragRef.current
-    const activeMode = modeRef.current
-    if (!finished || activeMode?.type !== 'adjust') return
+    if (!finished) return
     setDrag(null)
-    const slotId = activeMode.slotId
 
     if (finished.kind === 'move') {
-      // 박스 자체를 잡아 끌기: 크기 유지, 위치만 이동
       const dx = finished.x1 - finished.x0
       const dy = finished.y1 - finished.y0
-      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return // 그냥 클릭 -- 선택 유지
+      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return
       const b = finished.bbox
       const [x0, y0] = toRaw(b.left + dx, b.top + dy)
       const [x1, y1] = toRaw(b.left + b.width + dx, b.top + b.height + dy)
-      if (await sendAdjust(slotId, x0, y0, x1, y1, applyAll)) setMode(null)
+      await sendAdjust(finished.slotId, x0, y0, x1, y1, shiftHeld)
       return
     }
 
-    if (Math.abs(finished.x1 - finished.x0) < 6 || Math.abs(finished.y1 - finished.y0) < 6) {
-      setMode(null)
+    if (finished.kind === 'resize') {
+      const [ax, ay] = finished.anchor
+      if (Math.abs(finished.x1 - ax) < 6 || Math.abs(finished.y1 - ay) < 6) return
+      const [x0, y0] = toRaw(Math.min(ax, finished.x1), Math.min(ay, finished.y1))
+      const [x1, y1] = toRaw(Math.max(ax, finished.x1), Math.max(ay, finished.y1))
+      await sendAdjust(finished.slotId, x0, y0, x1, y1, shiftHeld)
       return
     }
-    const [x0, y0] = toRaw(Math.min(finished.x0, finished.x1), Math.min(finished.y0, finished.y1))
-    const [x1, y1] = toRaw(Math.max(finished.x0, finished.x1), Math.max(finished.y0, finished.y1))
-    // keep `mode` on failure (the slot stays selected) so the user can just
-    // drag again without reselecting it
-    if (await sendAdjust(slotId, x0, y0, x1, y1, applyAll)) setMode(null)
+
+    if (finished.kind === 'pen') {
+      const rect = fitRectangle(finished.points)
+      if (!rect) return
+      try {
+        await addLabel(batchId, cameraId, photo.photo, rect.map(([x, y]) => toRaw(x, y)))
+        setError(null)
+        onChanged()
+      } catch (err) {
+        setError(err.message)
+      }
+      return
+    }
+
+    if (finished.kind === 'erase') {
+      const ids = [...eraseIdsRef.current]
+      eraseIdsRef.current = new Set()
+      if (ids.length === 0) return
+      const deleteAll = shiftHeld
+      if (deleteAll && !window.confirm(`${ids.length}개 슬롯을 모든 사진에서 삭제할까요?\n(재탐지 때도 이 위치들은 다시 잡히지 않습니다)`)) {
+        return
+      }
+      try {
+        for (const id of ids) {
+          await editLabel(batchId, cameraId, photo.photo, id, deleteAll ? 'delete_all' : 'delete')
+        }
+        setError(null)
+        onChanged()
+      } catch (err) {
+        setError(err.message)
+        onChanged()
+      }
+    }
   }
 
   useEffect(() => {
-    function handleWindowMouseUp(e) {
-      finishDrag(e.shiftKey)
-    }
+    function handleWindowMouseUp(e) { finishDrag(e.shiftKey) }
     window.addEventListener('mouseup', handleWindowMouseUp)
     return () => window.removeEventListener('mouseup', handleWindowMouseUp)
-  }, [])
+  }, [photo, scale])
+
+  function collectErase(x, y) {
+    for (const s of photo.slots) {
+      if (!s.box_raw || s.excluded) continue
+      const d = displayBounds(s)
+      if (x >= d.left && x <= d.left + d.width && y >= d.top && y <= d.top + d.height) {
+        eraseIdsRef.current.add(s.id)
+      }
+    }
+  }
 
   function handleMouseDown(e) {
-    if (mode?.type !== 'adjust') return
     const rect = e.currentTarget.getBoundingClientRect()
     const px = e.clientX - rect.left
     const py = e.clientY - rect.top
-    // 선택된 박스 안에서 누르면 이동, 밖에서 누르면 새로 그리기
-    const slot = photo.slots.find((s) => s.id === mode.slotId)
-    if (slot?.box_raw) {
-      const b = boxBounds(slot.box_raw)
-      const disp = { left: b.left * scale, top: b.top * scale, width: b.width * scale, height: b.height * scale }
-      if (px >= disp.left && px <= disp.left + disp.width && py >= disp.top && py <= disp.top + disp.height) {
-        setDrag({ kind: 'move', x0: px, y0: py, x1: px, y1: py, bbox: disp })
-        return
-      }
+
+    if (tool === 'pen') {
+      setDrag({ kind: 'pen', points: [[px, py]] })
+      return
     }
-    setDrag({ x0: px, y0: py, x1: px, y1: py })
+    if (tool === 'erase') {
+      eraseIdsRef.current = new Set()
+      collectErase(px, py)
+      setDrag({ kind: 'erase', x1: px, y1: py })
+      return
+    }
+    // select tool: drag inside the selected box = move; empty space = deselect
+    if (selected) {
+      const slot = slotById(selected)
+      if (slot?.box_raw) {
+        const d = displayBounds(slot)
+        if (px >= d.left && px <= d.left + d.width && py >= d.top && py <= d.top + d.height) {
+          setDrag({ kind: 'move', slotId: selected, x0: px, y0: py, x1: px, y1: py, bbox: d })
+          return
+        }
+      }
+      setSelected(null)
+    }
   }
+
   function handleMouseMove(e) {
     if (!drag) return
     const rect = e.currentTarget.getBoundingClientRect()
-    setDrag((d) => (d ? { ...d, x1: e.clientX - rect.left, y1: e.clientY - rect.top } : d))
+    const px = e.clientX - rect.left
+    const py = e.clientY - rect.top
+    if (drag.kind === 'pen') {
+      setDrag((d) => (d ? { ...d, points: [...d.points, [px, py]] } : d))
+    } else if (drag.kind === 'erase') {
+      collectErase(px, py)
+      setDrag((d) => (d ? { ...d, x1: px, y1: py } : d))
+    } else {
+      setDrag((d) => (d ? { ...d, x1: px, y1: py } : d))
+    }
   }
 
-  // 미세 이동: 선택된 슬롯을 화살표 키로 raw 픽셀 단위 nudge (shift = 8px)
+  // 미세 이동: 방향키 (Shift = 크게), Delete = 이 사진에서 삭제, Esc = 선택 해제
   async function nudgeSelected(dxRaw, dyRaw) {
-    const activeMode = modeRef.current
-    if (activeMode?.type !== 'adjust') return
-    const slot = photo.slots.find((s) => s.id === activeMode.slotId)
+    const slotId = selectedRef.current
+    const slot = slotId && slotById(slotId)
     if (!slot?.box_raw) return
     const b = boxBounds(slot.box_raw)
-    await sendAdjust(activeMode.slotId, b.left + dxRaw, b.top + dyRaw,
+    await sendAdjust(slotId, b.left + dxRaw, b.top + dyRaw,
                       b.left + b.width + dxRaw, b.top + b.height + dyRaw, false)
   }
 
   useEffect(() => {
     async function handleKeyDown(e) {
-      const activeMode = modeRef.current
-      if (activeMode?.type !== 'adjust') return
+      if (toolRef.current !== 'select' || !selectedRef.current) return
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return
       const step = e.shiftKey ? 8 : 2
       if (e.key === 'ArrowLeft') { e.preventDefault(); nudgeSelected(-step, 0) }
       else if (e.key === 'ArrowRight') { e.preventDefault(); nudgeSelected(step, 0) }
       else if (e.key === 'ArrowUp') { e.preventDefault(); nudgeSelected(0, -step) }
       else if (e.key === 'ArrowDown') { e.preventDefault(); nudgeSelected(0, step) }
-      else if (e.key === 'Escape') { setMode(null); setDrag(null) }
+      else if (e.key === 'Escape') { setSelected(null); setDrag(null) }
       else if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
-        const slotId = activeMode.slotId
-        setMode(null)
+        const slotId = selectedRef.current
+        setSelected(null)
         try {
           await editLabel(batchId, cameraId, photo.photo, slotId, 'delete')
           setError(null)
@@ -178,90 +258,47 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [photo])
 
-  async function handleContainerClick(e) {
-    if (mode?.type !== 'add') return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const points = [...mode.points, [e.clientX - rect.left, e.clientY - rect.top]]
-    if (points.length < 4) {
-      setMode({ type: 'add', points })
-      return
-    }
-    try {
-      const rawPolygon = points.map(([x, y]) => toRaw(x, y))
-      await addLabel(batchId, cameraId, photo.photo, rawPolygon)
-      setMode(null)
-      setError(null)
-      onChanged()
-    } catch (err) {
-      // keep the 4 clicked points so the user doesn't have to redo them --
-      // only the "전체 취소" link or a fresh 4th click retries/abandons it
-      setError(err.message)
-    }
-  }
+  const selectedSlot = selected ? slotById(selected) : null
+  const hiddenCount = slots.filter((s) => s.excluded).length
 
-  function undoLastPoint() {
-    setMode((m) => (m.points.length ? { ...m, points: m.points.slice(0, -1) } : m))
-  }
-
-  async function handleDelete(slotId, e) {
-    e.stopPropagation()
-    // shift+× = "이 슬롯 자체가 잘못됨": 카메라 config에서 제거 (모든 사진에
-    // 반영), 그리고 리뷰 로그에 거부로 기록되어 다음 재탐지에서도 이 위치가
-    // 자동으로 걸러짐. 일반 × = 이 사진에서만 가림 (차가 가렸을 때 등).
-    const deleteAll = e.shiftKey
-    if (deleteAll && !window.confirm(`${slotId} 슬롯을 모든 사진에서 삭제할까요?\n(카메라 설정에서 제거되고, 재탐지 시에도 이 위치는 다시 잡히지 않습니다)`)) {
-      return
-    }
-    try {
-      await editLabel(batchId, cameraId, photo.photo, slotId, deleteAll ? 'delete_all' : 'delete')
-      setError(null)
-      onChanged()
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
-  function handleSelectSlot(slotId) {
-    if (mode) return
-    setError(null)
-    setMode({ type: 'adjust', slotId })
-  }
-
-  const hint = mode?.type === 'adjust'
-    ? <>{mode.slotId} 선택됨 -- 박스를 끌면 이동, 바깥에 드래그하면 새로 그리기, 방향키 미세이동(Shift=크게), Delete=이 사진에서 삭제, Esc=취소. Shift 누른 채 놓으면 모든 사진에 적용 (<a href="#" onClick={(e) => { e.preventDefault(); setMode(null) }}>취소</a>)</>
-    : mode?.type === 'add'
-      ? (
-        <>
-          새 슬롯 추가 중 -- 놓친 슬롯의 네 꼭짓점을 순서대로 클릭 ({mode.points.length}/4)
-          {' '}(<a href="#" onClick={(e) => { e.preventDefault(); undoLastPoint() }}>마지막 점 취소</a>
-          {' · '}<a href="#" onClick={(e) => { e.preventDefault(); setMode(null) }}>전체 취소</a>)
-        </>
-      )
-      : null
+  const toolHint = tool === 'select'
+    ? '박스 클릭 = 선택 · 선택 후 끌기 = 이동, 모서리 핸들 = 크기조절, 방향키 = 미세이동(Shift=크게), Delete = 이 사진에서 삭제. Shift 누른 채 놓으면 모든 사진에 적용.'
+    : tool === 'pen'
+      ? '펜: 슬롯 둘레를 대충 따라 그리면 기울기 맞는 사각형으로 자동 정리되어 추가됩니다.'
+      : '지우개: 지울 박스들 위를 드래그하면 이 사진에서 가려집니다. Shift 누른 채 놓으면 모든 사진에서 삭제 + 재탐지 차단.'
 
   return (
     <div className="photo-card">
       <div className="photo-name">{photo.photo}</div>
-      {hint && <p className="hint">{hint}</p>}
+      <p style={{ marginBottom: 8 }}>
+        {[['select', '선택'], ['pen', '펜'], ['erase', '지우개']].map(([key, label]) => (
+          <button
+            key={key}
+            className={tool === key ? 'btn btn-danger' : 'btn'}
+            style={{ marginRight: 6 }}
+            onClick={() => { setTool(key); setSelected(null); setDrag(null) }}
+          >
+            {label}
+          </button>
+        ))}
+        <a className="btn" style={{ marginRight: 6 }} href={src} download={`${photo.photo}_labeled.png`}>
+          이 사진 저장
+        </a>
+        {hiddenCount > 0 && (
+          <button className="btn" onClick={() => setShowHidden((v) => !v)}>
+            {showHidden ? '가려진 라벨 숨기기' : `가려진 라벨 ${hiddenCount}개 보기`}
+          </button>
+        )}
+      </p>
+      <p className="hint">{toolHint}</p>
       {error && <p className="error-text">{error} (<a href="#" onClick={(e) => { e.preventDefault(); setError(null) }}>닫기</a>)</p>}
-      {!mode && (
-        <p style={{ marginBottom: 8 }}>
-          <button className="btn" onClick={() => setMode({ type: 'add', points: [] })}>+ 새 슬롯 추가</button>
-          {slots.some((s) => s.excluded) && (
-            <button className="btn" style={{ marginLeft: 8 }} onClick={() => setShowHidden((v) => !v)}>
-              {showHidden ? '가려진 라벨 숨기기' : `가려진 라벨 ${slots.filter((s) => s.excluded).length}개 보기`}
-            </button>
-          )}
-        </p>
-      )}
       <div
         style={{
           position: 'relative', display: 'inline-block', width: displayW, height: displayH,
-          cursor: mode ? 'crosshair' : 'default',
+          cursor: tool === 'pen' ? 'crosshair' : tool === 'erase' ? 'cell' : 'default',
         }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
-        onClick={handleContainerClick}
       >
         <img
           src={src}
@@ -271,13 +308,11 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
           onLoad={(e) => setNaturalSize({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
         />
         {naturalSize && (
-          <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: displayW, height: displayH, pointerEvents: 'none' }}
-          >
+          <svg style={{ position: 'absolute', top: 0, left: 0, width: displayW, height: displayH, pointerEvents: 'none' }}>
             {slots.map((s) => {
               if (!s.box_raw) return null
               if (s.excluded && !showHidden) return null
-              const isSelected = mode?.type === 'adjust' && mode.slotId === s.id
+              const isSelected = selected === s.id
               return (
                 <polygon
                   key={s.id}
@@ -290,36 +325,37 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
                 />
               )
             })}
+            {drag?.kind === 'pen' && drag.points.length > 1 && (
+              <polyline
+                points={drag.points.map((p) => p.join(',')).join(' ')}
+                fill="none" stroke="orange" strokeWidth="2"
+              />
+            )}
           </svg>
         )}
         {naturalSize && slots.map((s) => {
           if (!s.box_raw) return null
           if (s.excluded && !showHidden) return null
-          const b = boxBounds(s.box_raw)
-          const isSelected = mode?.type === 'adjust' && mode.slotId === s.id
+          const d = displayBounds(s)
           return (
             <div
               key={s.id}
               role="button"
-              tabIndex={s.excluded || mode ? -1 : 0}
+              tabIndex={s.excluded || tool !== 'select' ? -1 : 0}
               aria-label={`슬롯 ${s.id}, 신뢰도 ${s.confidence != null ? s.confidence.toFixed(2) : '알 수 없음'}`}
-              onClick={(e) => { if (!s.excluded && !mode) { e.stopPropagation(); handleSelectSlot(s.id) } }}
+              onClick={(e) => {
+                if (tool === 'select' && !s.excluded) { e.stopPropagation(); setSelected(s.id) }
+              }}
               onKeyDown={(e) => {
-                if ((e.key === 'Enter' || e.key === ' ') && !s.excluded && !mode) {
+                if ((e.key === 'Enter' || e.key === ' ') && tool === 'select' && !s.excluded) {
                   e.preventDefault()
-                  handleSelectSlot(s.id)
+                  setSelected(s.id)
                 }
               }}
               style={{
                 position: 'absolute',
-                left: b.left * scale,
-                top: b.top * scale,
-                width: b.width * scale,
-                height: b.height * scale,
-                // 실제 라벨 모양은 위 SVG 폴리곤이 그림 -- 이 div는 클릭/버튼용
-                // 투명 히트박스만 담당 (bbox 사각형을 테두리로 그리면 기울어진
-                // 이웃 라벨들이 화면에서만 겹쳐 보이는 착시가 생김)
-                cursor: mode ? (isSelected ? 'move' : 'default') : 'pointer',
+                left: d.left, top: d.top, width: d.width, height: d.height,
+                cursor: tool === 'select' ? (selected === s.id ? 'move' : 'pointer') : 'inherit',
                 boxSizing: 'border-box',
               }}
             >
@@ -331,17 +367,7 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
               >
                 {s.confidence != null ? s.confidence.toFixed(2) : '-'}
               </span>
-              {!s.excluded && !mode && (
-                <button
-                  className="btn btn-danger"
-                  aria-label={`슬롯 ${s.id} 삭제`}
-                  onClick={(e) => handleDelete(s.id, e)}
-                  style={{ position: 'absolute', top: -12, right: -12, width: 20, height: 20, padding: 0, lineHeight: '16px', fontSize: 12 }}
-                >
-                  ×
-                </button>
-              )}
-              {s.excluded && !mode && (
+              {s.excluded && tool === 'select' && (
                 <button
                   className="btn"
                   aria-label={`슬롯 ${s.id} 복원`}
@@ -363,36 +389,49 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
             </div>
           )
         })}
-        {drag && drag.kind === 'move' && (
+        {/* 크기조절 핸들: 선택된 박스의 네 모서리 */}
+        {naturalSize && tool === 'select' && selectedSlot?.box_raw && !drag && (() => {
+          const d = displayBounds(selectedSlot)
+          const corners = [
+            [d.left, d.top], [d.left + d.width, d.top],
+            [d.left + d.width, d.top + d.height], [d.left, d.top + d.height],
+          ]
+          return corners.map(([hx, hy], i) => (
+            <div
+              key={i}
+              onMouseDown={(e) => {
+                e.stopPropagation()
+                const opposite = corners[(i + 2) % 4]
+                setDrag({ kind: 'resize', slotId: selectedSlot.id, anchor: opposite, x1: hx, y1: hy })
+              }}
+              style={{
+                position: 'absolute', left: hx - 5, top: hy - 5, width: 10, height: 10,
+                background: '#ff4d4f', border: '1px solid #fff', cursor: 'nwse-resize', zIndex: 3,
+              }}
+            />
+          ))
+        })()}
+        {(drag?.kind === 'move' || drag?.kind === 'resize') && (
           <div
             style={{
               position: 'absolute',
               border: '2px dashed orange',
-              left: drag.bbox.left + (drag.x1 - drag.x0),
-              top: drag.bbox.top + (drag.y1 - drag.y0),
-              width: drag.bbox.width,
-              height: drag.bbox.height,
               pointerEvents: 'none',
+              ...(drag.kind === 'move'
+                ? {
+                    left: drag.bbox.left + (drag.x1 - drag.x0),
+                    top: drag.bbox.top + (drag.y1 - drag.y0),
+                    width: drag.bbox.width,
+                    height: drag.bbox.height,
+                  }
+                : {
+                    left: Math.min(drag.anchor[0], drag.x1),
+                    top: Math.min(drag.anchor[1], drag.y1),
+                    width: Math.abs(drag.x1 - drag.anchor[0]),
+                    height: Math.abs(drag.y1 - drag.anchor[1]),
+                  }),
             }}
           />
-        )}
-        {drag && drag.kind !== 'move' && (
-          <div
-            style={{
-              position: 'absolute',
-              border: '2px dashed orange',
-              left: Math.min(drag.x0, drag.x1),
-              top: Math.min(drag.y0, drag.y1),
-              width: Math.abs(drag.x1 - drag.x0),
-              height: Math.abs(drag.y1 - drag.y0),
-            }}
-          />
-        )}
-        {mode?.type === 'add' && mode.points.length > 0 && (
-          <svg style={{ position: 'absolute', top: 0, left: 0, width: displayW, height: displayH, pointerEvents: 'none' }}>
-            <polyline points={mode.points.map((p) => p.join(',')).join(' ')} fill="none" stroke="orange" strokeWidth="2" />
-            {mode.points.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="4" fill="orange" />)}
-          </svg>
         )}
       </div>
     </div>
@@ -403,9 +442,7 @@ export default function ResultsPage({ batchId, cameras, onGoHome }) {
   const [cameraId, setCameraId] = useState(cameras[0]?.camera_id)
   const [photos, setPhotos] = useState([])
   const [loadError, setLoadError] = useState(null)
-  // guards against out-of-order responses: if the user switches cameras
-  // again before an in-flight listPhotos() for the *previous* camera
-  // resolves, that stale response must not overwrite the newer one.
+  // guards against out-of-order responses on fast camera switching
   const requestIdRef = useRef(0)
 
   async function refresh() {
@@ -423,10 +460,6 @@ export default function ResultsPage({ batchId, cameras, onGoHome }) {
   }
 
   useEffect(() => {
-    // clear immediately on camera switch -- otherwise the old camera's
-    // photos briefly render paired with the new cameraId until refresh()
-    // resolves, so PhotoEditor requests a photo name under the wrong
-    // camera and gets a 404.
     setPhotos([])
     refresh()
   }, [cameraId])
@@ -446,11 +479,9 @@ export default function ResultsPage({ batchId, cameras, onGoHome }) {
       <div className="panel" style={{ marginBottom: 20 }}>
         <h2>결과 확인</h2>
         <p className="hint">
-          신뢰도가 낮은 순으로 정렬됩니다. 박스를 클릭해 선택하면: 박스를 끌어서 이동,
-          바깥에 드래그해서 새로 그리기, 방향키로 미세 이동(Shift=크게), Delete 키로 이 사진에서 삭제.
-          × = 이 사진에서만 가림 (가려진 박스의 "복원" 버튼으로 되돌리기),
-          Shift+× = 잘못 잡힌 슬롯을 모든 사진에서 삭제 + 재탐지 때도 그 위치를 다시 잡지 않게 기억.
-          위치 조정을 Shift 누른 채 놓으면 그 위치가 모든 사진에 적용됩니다.
+          신뢰도가 낮은 순으로 정렬됩니다. 사진마다 도구를 골라 편집:
+          <b> 선택</b>(이동·크기조절·미세이동) · <b>펜</b>(둘레를 그리면 슬롯 추가) ·
+          <b> 지우개</b>(드래그로 삭제, Shift는 모든 사진 + 재탐지 차단).
         </p>
         <label>
           카메라 선택{' '}
