@@ -299,6 +299,58 @@ def test_delete_all_removes_slot_from_config_and_logs_reject(tmp_path, monkeypat
     assert labels[0]["polygon"] == victim["polygon_raw"]
 
 
+def test_adjust_center_scale_preserves_plane_shape(tmp_path, monkeypatch):
+    # shape-preserving edit: scale only changes w/h multiplicatively, the
+    # plane rect (tilted on-screen shape) is otherwise untouched.
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+    _isolate_review_store(tmp_path, monkeypatch)
+
+    import overrides
+    import pipeline
+    from parking_slot import SlotConfig
+    import storage as storage_module
+    config = SlotConfig.load(str(storage_module.config_path(SAMPLE_CAMERA)))
+    slot = config.slots[0]
+    before = pipeline._label_box_plane(config, {}, slot["id"])
+
+    r = client.post(
+        f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}/labels/{slot['id']}",
+        json={"action": "adjust", "scale": [2.0, 0.5]})
+    assert r.status_code == 200
+
+    box = overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)["adjusted"][slot["id"]]
+    assert box["w"] == pytest.approx(before[2] * 2.0)
+    assert box["h"] == pytest.approx(before[3] * 0.5)
+    assert box["cx"] == pytest.approx(before[0])
+    assert box["cy"] == pytest.approx(before[1])
+
+
+def test_undo_redo_roundtrip(tmp_path, monkeypatch):
+    batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
+    client = _client()
+    _isolate_review_store(tmp_path, monkeypatch)
+
+    import overrides
+    from parking_slot import SlotConfig
+    import storage as storage_module
+    config = SlotConfig.load(str(storage_module.config_path(SAMPLE_CAMERA)))
+    slot_id = config.slots[0]["id"]
+
+    base = f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}"
+    assert client.post(f"{base}/labels/{slot_id}", json={"action": "delete"}).status_code == 200
+    assert slot_id in overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)["excluded_slots"]
+
+    assert client.post(f"{base}/undo").status_code == 200
+    assert slot_id not in overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)["excluded_slots"]
+
+    assert client.post(f"{base}/redo").status_code == 200
+    assert slot_id in overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)["excluded_slots"]
+
+    # nothing left to redo
+    assert client.post(f"{base}/redo").status_code == 400
+
+
 def test_adjust_all_saves_default_label_box_in_config(tmp_path, monkeypatch):
     batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
     client = _client()

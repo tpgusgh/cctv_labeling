@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { listPhotos, photoUrl, editLabel, addLabel, downloadCameraUrl, downloadBatchUrl } from './api.js'
+import { listPhotos, photoUrl, editLabel, addLabel, undoPhoto, redoPhoto, downloadCameraUrl, downloadBatchUrl } from './api.js'
 
 const BASE_MAX_DISPLAY_WIDTH = 900
 
@@ -11,41 +11,11 @@ function boxBounds(boxRaw) {
   return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top }
 }
 
-// 펜툴 자유곡선 -> 슬롯 사각형: 경로 점들의 주성분(PCA) 방향으로 최소
-// 직사각형을 맞춘다. 슬롯 둘레를 대충 따라 긋기만 하면 기울기까지 맞는
-// 사각형이 나온다.
-function fitRectangle(points) {
-  const n = points.length
-  if (n < 3) return null
-  let mx = 0; let my = 0
-  for (const [x, y] of points) { mx += x; my += y }
-  mx /= n; my /= n
-  let sxx = 0; let sxy = 0; let syy = 0
-  for (const [x, y] of points) {
-    const dx = x - mx; const dy = y - my
-    sxx += dx * dx; sxy += dx * dy; syy += dy * dy
-  }
-  const angle = 0.5 * Math.atan2(2 * sxy, sxx - syy)
-  const ux = Math.cos(angle); const uy = Math.sin(angle)
-  const vx = -uy; const vy = ux
-  let umin = Infinity; let umax = -Infinity; let vmin = Infinity; let vmax = -Infinity
-  for (const [x, y] of points) {
-    const du = (x - mx) * ux + (y - my) * uy
-    const dv = (x - mx) * vx + (y - my) * vy
-    if (du < umin) umin = du
-    if (du > umax) umax = du
-    if (dv < vmin) vmin = dv
-    if (dv > vmax) vmax = dv
-  }
-  if (umax - umin < 8 || vmax - vmin < 8) return null
-  const corner = (u, v) => [mx + u * ux + v * vx, my + u * uy + v * vy]
-  return [corner(umin, vmin), corner(umax, vmin), corner(umax, vmax), corner(umin, vmax)]
-}
-
 function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
   const [tool, setTool] = useState('select')      // 'select' | 'pen' | 'erase'
   const [selected, setSelected] = useState(null)  // slot id (select tool)
   const [drag, setDrag] = useState(null)
+  const [penPoints, setPenPoints] = useState([])  // 펜: 꼭짓점 4개 클릭
   const [naturalSize, setNaturalSize] = useState(null)
   const [error, setError] = useState(null)
   // ×로 가린 라벨은 기본적으로 화면에서 완전히 사라짐 -- 남은 라벨과 겹쳐
@@ -87,11 +57,13 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     return { left: b.left * scale, top: b.top * scale, width: b.width * scale, height: b.height * scale }
   }
 
-  async function sendAdjust(slotId, rawX0, rawY0, rawX1, rawY1, applyAll) {
+  // 모양 보존 편집: 라벨의 기울어진 평면 사각형(w,h)은 그대로 두고 중심
+  // 이동/배율만 보냄 -- 화면 bbox를 매번 재변환하면 기울어진 라벨 모양이
+  // 뭉개졌음.
+  async function sendBoxUpdate(slotId, centerRaw, scaleFactors, applyAll) {
     try {
-      // applyAll (Shift 놓기) = 이 위치를 슬롯 기본값으로 저장 (모든 사진 적용)
       await editLabel(batchId, cameraId, photo.photo, slotId, applyAll ? 'adjust_all' : 'adjust', {
-        raw_polygon: [[rawX0, rawY0], [rawX1, rawY1]],
+        center_raw: centerRaw, scale: scaleFactors,
       })
       setError(null)
       onChanged()
@@ -112,31 +84,21 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
       const dy = finished.y1 - finished.y0
       if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return
       const b = finished.bbox
-      const [x0, y0] = toRaw(b.left + dx, b.top + dy)
-      const [x1, y1] = toRaw(b.left + b.width + dx, b.top + b.height + dy)
-      await sendAdjust(finished.slotId, x0, y0, x1, y1, shiftHeld)
+      const centerRaw = toRaw(b.left + b.width / 2 + dx, b.top + b.height / 2 + dy)
+      await sendBoxUpdate(finished.slotId, centerRaw, null, shiftHeld)
       return
     }
 
     if (finished.kind === 'resize') {
       const [ax, ay] = finished.anchor
-      if (Math.abs(finished.x1 - ax) < 6 || Math.abs(finished.y1 - ay) < 6) return
-      const [x0, y0] = toRaw(Math.min(ax, finished.x1), Math.min(ay, finished.y1))
-      const [x1, y1] = toRaw(Math.max(ax, finished.x1), Math.max(ay, finished.y1))
-      await sendAdjust(finished.slotId, x0, y0, x1, y1, shiftHeld)
-      return
-    }
-
-    if (finished.kind === 'pen') {
-      const rect = fitRectangle(finished.points)
-      if (!rect) return
-      try {
-        await addLabel(batchId, cameraId, photo.photo, rect.map(([x, y]) => toRaw(x, y)))
-        setError(null)
-        onChanged()
-      } catch (err) {
-        setError(err.message)
-      }
+      const newW = Math.abs(finished.x1 - ax)
+      const newH = Math.abs(finished.y1 - ay)
+      if (newW < 6 || newH < 6) return
+      const b = finished.bbox
+      const fw = newW / b.width
+      const fh = newH / b.height
+      const centerRaw = toRaw((ax + finished.x1) / 2, (ay + finished.y1) / 2)
+      await sendBoxUpdate(finished.slotId, centerRaw, [fw, fh], shiftHeld)
       return
     }
 
@@ -177,13 +139,26 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     }
   }
 
-  function handleMouseDown(e) {
+  async function handleMouseDown(e) {
     const rect = e.currentTarget.getBoundingClientRect()
     const px = e.clientX - rect.left
     const py = e.clientY - rect.top
 
     if (tool === 'pen') {
-      setDrag({ kind: 'pen', points: [[px, py]] })
+      // 꼭짓점 4개 클릭 -> 슬롯 추가 (4번째 클릭에서 확정)
+      const pts = [...penPoints, [px, py]]
+      if (pts.length < 4) {
+        setPenPoints(pts)
+        return
+      }
+      setPenPoints([])
+      try {
+        await addLabel(batchId, cameraId, photo.photo, pts.map(([x, y]) => toRaw(x, y)))
+        setError(null)
+        onChanged()
+      } catch (err) {
+        setError(err.message)
+      }
       return
     }
     if (tool === 'erase') {
@@ -211,9 +186,7 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     const rect = e.currentTarget.getBoundingClientRect()
     const px = e.clientX - rect.left
     const py = e.clientY - rect.top
-    if (drag.kind === 'pen') {
-      setDrag((d) => (d ? { ...d, points: [...d.points, [px, py]] } : d))
-    } else if (drag.kind === 'erase') {
+    if (drag.kind === 'erase') {
       collectErase(px, py)
       setDrag((d) => (d ? { ...d, x1: px, y1: py } : d))
     } else {
@@ -227,8 +200,7 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     const slot = slotId && slotById(slotId)
     if (!slot?.box_raw) return
     const b = boxBounds(slot.box_raw)
-    await sendAdjust(slotId, b.left + dxRaw, b.top + dyRaw,
-                      b.left + b.width + dxRaw, b.top + b.height + dyRaw, false)
+    await sendBoxUpdate(slotId, [b.left + b.width / 2 + dxRaw, b.top + b.height / 2 + dyRaw], null, false)
   }
 
   useEffect(() => {
@@ -262,10 +234,20 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
   const hiddenCount = slots.filter((s) => s.excluded).length
 
   const toolHint = tool === 'select'
-    ? '박스 클릭 = 선택 · 선택 후 끌기 = 이동, 모서리 핸들 = 크기조절, 방향키 = 미세이동(Shift=크게), Delete = 이 사진에서 삭제. Shift 누른 채 놓으면 모든 사진에 적용.'
+    ? '박스 클릭 = 선택 · 선택 후 끌기 = 이동, 모서리 핸들 = 크기조절 (모양은 유지되고 위치/크기만 변함), 방향키 = 미세이동(Shift=크게), Delete = 이 사진에서 삭제. Shift 누른 채 놓으면 모든 사진에 적용.'
     : tool === 'pen'
-      ? '펜: 슬롯 둘레를 대충 따라 그리면 기울기 맞는 사각형으로 자동 정리되어 추가됩니다.'
+      ? `펜: 슬롯의 네 꼭짓점을 순서대로 클릭 (${penPoints.length}/4) -- 4번째 클릭에서 추가됩니다.`
       : '지우개: 지울 박스들 위를 드래그하면 이 사진에서 가려집니다. Shift 누른 채 놓으면 모든 사진에서 삭제 + 재탐지 차단.'
+
+  async function handleHistory(fn) {
+    try {
+      await fn(batchId, cameraId, photo.photo)
+      setError(null)
+      onChanged()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
 
   return (
     <div className="photo-card">
@@ -276,14 +258,21 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
             key={key}
             className={tool === key ? 'btn btn-danger' : 'btn'}
             style={{ marginRight: 6 }}
-            onClick={() => { setTool(key); setSelected(null); setDrag(null) }}
+            onClick={() => { setTool(key); setSelected(null); setDrag(null); setPenPoints([]) }}
           >
             {label}
           </button>
         ))}
+        <button className="btn" style={{ marginRight: 6 }} title="뒤로가기 (편집 취소)"
+                onClick={() => handleHistory(undoPhoto)}>↩ 뒤로</button>
+        <button className="btn" style={{ marginRight: 6 }} title="앞으로가기 (다시 실행)"
+                onClick={() => handleHistory(redoPhoto)}>↪ 앞으로</button>
         <a className="btn" style={{ marginRight: 6 }} href={src} download={`${photo.photo}_labeled.png`}>
           이 사진 저장
         </a>
+        {tool === 'pen' && penPoints.length > 0 && (
+          <button className="btn" onClick={() => setPenPoints((p) => p.slice(0, -1))}>마지막 점 취소</button>
+        )}
         {hiddenCount > 0 && (
           <button className="btn" onClick={() => setShowHidden((v) => !v)}>
             {showHidden ? '가려진 라벨 숨기기' : `가려진 라벨 ${hiddenCount}개 보기`}
@@ -325,11 +314,14 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
                 />
               )
             })}
-            {drag?.kind === 'pen' && drag.points.length > 1 && (
-              <polyline
-                points={drag.points.map((p) => p.join(',')).join(' ')}
-                fill="none" stroke="orange" strokeWidth="2"
-              />
+            {tool === 'pen' && penPoints.length > 0 && (
+              <>
+                <polyline
+                  points={penPoints.map((p) => p.join(',')).join(' ')}
+                  fill="none" stroke="orange" strokeWidth="2"
+                />
+                {penPoints.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="4" fill="orange" />)}
+              </>
             )}
           </svg>
         )}
@@ -402,7 +394,7 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
               onMouseDown={(e) => {
                 e.stopPropagation()
                 const opposite = corners[(i + 2) % 4]
-                setDrag({ kind: 'resize', slotId: selectedSlot.id, anchor: opposite, x1: hx, y1: hy })
+                setDrag({ kind: 'resize', slotId: selectedSlot.id, anchor: opposite, x1: hx, y1: hy, bbox: d })
               }}
               style={{
                 position: 'absolute', left: hx - 5, top: hy - 5, width: 10, height: 10,

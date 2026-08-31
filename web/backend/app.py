@@ -330,22 +330,42 @@ def edit_label(batch_id, camera_id, photo, slot_id):
         if slot is None:
             return jsonify({"error": "slot not found"}), 404
         view, homography = pipeline._prepare_slot_view(config, slot, slot_id)
-        # raw_polygon: the 2 opposite corners the user dragged out directly on
-        # the original uploaded photo (raw pixel space) -- convert through the
-        # same local-view + homography pipeline.run_auto_all uses, just
-        # starting one step earlier (raw pixels instead of the old rectified
-        # patch image's own pixel space).
-        raw_polygon = payload.get("raw_polygon")
-        _validate_raw_polygon(raw_polygon, expected_len=2)
-        local_pts = view.raw_to_local(raw_polygon)
-        plane_pts = perspective.pixel_to_plane_points(homography, local_pts)
-        (px0, py0), (px1, py1) = plane_pts
-        box = {
-            "cx": float((px0 + px1) / 2),
-            "cy": float((py0 + py1) / 2),
-            "w": float(abs(px1 - px0)),
-            "h": float(abs(py1 - py0)),
-        }
+        override = overrides.load_override(batch_id, camera_id, photo)
+        if payload.get("center_raw") is not None or payload.get("scale") is not None:
+            # shape-preserving edit: keep the label's slot-plane rectangle
+            # (its tilted on-screen shape) and only translate its center /
+            # scale its size. Converting a screen-space bbox back through the
+            # homography on every move visibly warped tilted labels ("크기조절
+            # 할때 모양이 바껴버리던데, 위치 옮기는거도").
+            cur_cx, cur_cy, cur_w, cur_h = pipeline._label_box_plane(
+                config, override["adjusted"], slot_id)
+            new_cx, new_cy = cur_cx, cur_cy
+            if payload.get("center_raw") is not None:
+                center_raw = payload["center_raw"]
+                _validate_raw_polygon([center_raw], expected_len=1)
+                local_pt = view.raw_to_local([center_raw])
+                (new_cx, new_cy), = perspective.pixel_to_plane_points(homography, local_pt)
+            fw, fh = payload.get("scale") or [1.0, 1.0]
+            box = {
+                "cx": float(new_cx), "cy": float(new_cy),
+                "w": float(cur_w * float(fw)), "h": float(cur_h * float(fh)),
+            }
+        else:
+            # raw_polygon: the 2 opposite corners the user dragged out directly
+            # on the original uploaded photo (raw pixel space) -- convert
+            # through the same local-view + homography pipeline.run_auto_all
+            # uses (kept for full redraws).
+            raw_polygon = payload.get("raw_polygon")
+            _validate_raw_polygon(raw_polygon, expected_len=2)
+            local_pts = view.raw_to_local(raw_polygon)
+            plane_pts = perspective.pixel_to_plane_points(homography, local_pts)
+            (px0, py0), (px1, py1) = plane_pts
+            box = {
+                "cx": float((px0 + px1) / 2),
+                "cy": float((py0 + py1) / 2),
+                "w": float(abs(px1 - px0)),
+                "h": float(abs(py1 - py0)),
+            }
         if action == "adjust_all":
             # save as this slot's default placement in the shared config --
             # every photo (every batch) of this camera renders with it,
@@ -358,6 +378,22 @@ def edit_label(batch_id, camera_id, photo, slot_id):
     else:
         return jsonify({"error": "action must be 'delete', 'delete_all', 'restore', 'adjust' or 'adjust_all'"}), 400
 
+    _rerender_photo(batch_id, camera_id, photo)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/batches/<batch_id>/cameras/<camera_id>/photos/<photo>/undo")
+def undo_photo(batch_id, camera_id, photo):
+    if overrides.undo(batch_id, camera_id, photo) is None:
+        return jsonify({"error": "되돌릴 편집이 없습니다"}), 400
+    _rerender_photo(batch_id, camera_id, photo)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/batches/<batch_id>/cameras/<camera_id>/photos/<photo>/redo")
+def redo_photo(batch_id, camera_id, photo):
+    if overrides.redo(batch_id, camera_id, photo) is None:
+        return jsonify({"error": "다시 실행할 편집이 없습니다"}), 400
     _rerender_photo(batch_id, camera_id, photo)
     return jsonify({"ok": True})
 

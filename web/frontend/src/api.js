@@ -104,6 +104,18 @@ export async function uploadLooseFiles(fileList, { onProgress } = {}) {
   return body
 }
 
+export async function undoPhoto(batchId, cameraId, photo) {
+  const res = await fetch(`/api/batches/${batchId}/cameras/${cameraId}/photos/${photo}/undo`, { method: 'POST' })
+  await _checkOk(res, 'undo failed')
+  return res.json()
+}
+
+export async function redoPhoto(batchId, cameraId, photo) {
+  const res = await fetch(`/api/batches/${batchId}/cameras/${cameraId}/photos/${photo}/redo`, { method: 'POST' })
+  await _checkOk(res, 'redo failed')
+  return res.json()
+}
+
 export async function getBatchStatus(batchId) {
   const res = await fetch(`/api/batches/${batchId}/status`)
   await _checkOk(res, 'status fetch failed')
