@@ -15,7 +15,9 @@ _LOCK = threading.Lock()
 _JOBS = {}
 
 MODEL_PATH = storage.PROJECT_ROOT / "models" / "slot_classifier.joblib"
-YOLO_MODEL_PATH = storage.PROJECT_ROOT / "models" / "yolov8_seg_slots_v6.pt"
+# stable name maintained by src/retrain_yolo.py (promote-if-better) -- the
+# web app no longer needs a code change when the model improves.
+YOLO_MODEL_PATH = storage.PROJECT_ROOT / "models" / "yolov8_seg_slots_production.pt"
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 

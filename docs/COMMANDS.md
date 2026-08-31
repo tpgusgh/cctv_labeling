@@ -190,7 +190,27 @@ CV(Hough+연결영역)와 **앙상블**로 탐지함 (없으면 classical CV만)
 기준으로 합쳐지고 신뢰도 높은 쪽이 남음). `--auto-accept-agreement` 주면
 두 탐지기가 동시에 잡은 후보는 리뷰 없이 자동 승인.
 
-### 7-4. 거부 이력 자동 억제
+### 7-4. 재학습 원커맨드 (권장)
+
+리뷰/웹 수정 기록이 충분히 쌓이면 (대략 새 결정 100건 이상) 이거 하나만 실행:
+
+```bash
+.venv/bin/python src/retrain_yolo.py
+```
+
+자동으로: 데이터셋 export → 현재 운영 모델에서 파인튜닝 (기본 100 에폭,
+Apple Silicon 기준 약 1시간) → 운영 모델과 성능 비교 (config recall 우선,
+거부지역 오탐율 차선) → **이길 때만** `models/yolov8_seg_slots_production.pt`
+교체. 지든 이기든 모든 체크포인트는 `models/archive/`에 보관되어 롤백 가능.
+끝나면 웹앱 재시작(`./run_web.sh`)만 하면 새 모델 적용.
+
+모델 단독 평가는:
+
+```bash
+.venv/bin/python src/evaluate_seg_model.py models/yolov8_seg_slots_production.pt
+```
+
+### 7-5. 거부 이력 자동 억제
 
 사람이 거부한 위치는 `generate_config`가 기억함: 같은 카메라에서 리뷰
 로그(`review/labels.jsonl`)에 거부로 기록된 지역과 겹치는 탐지는 config에
