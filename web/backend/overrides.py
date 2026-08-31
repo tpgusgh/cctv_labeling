@@ -40,11 +40,22 @@ def _mutate(batch_id, camera_id, photo_stem, fn):
     """Apply an edit with undo history: the pre-edit state is pushed onto the
     undo stack and the redo stack is cleared (a new edit forks history)."""
     override = load_override(batch_id, camera_id, photo_stem)
-    override["undo"] = (override["undo"] + [_core(override)])[-MAX_HISTORY:]
+    override["undo"] = (override["undo"] + [{"kind": "override", "state": _core(override)}])[-MAX_HISTORY:]
     override["redo"] = []
     fn(override)
     save_override(batch_id, camera_id, photo_stem, override)
     return override
+
+
+def push_add(batch_id, camera_id, photo_stem, slot_id, polygon):
+    """Record a pen-drawn slot addition in this photo's history so undo can
+    remove it again (the slot itself lives in the camera config -- the app
+    layer applies the config change when this entry is undone/redone)."""
+    override = load_override(batch_id, camera_id, photo_stem)
+    override["undo"] = (override["undo"] + [{"kind": "add_slot", "slot_id": slot_id,
+                                              "polygon": polygon}])[-MAX_HISTORY:]
+    override["redo"] = []
+    save_override(batch_id, camera_id, photo_stem, override)
 
 
 def exclude_slot(batch_id, camera_id, photo_stem, slot_id):
@@ -75,24 +86,33 @@ def restore_slot(batch_id, camera_id, photo_stem, slot_id):
 
 
 def undo(batch_id, camera_id, photo_stem):
+    """Pop one history entry. Returns the popped entry (so the app layer can
+    apply config-level parts like removing a pen-added slot), or None if
+    there is nothing to undo."""
     override = load_override(batch_id, camera_id, photo_stem)
     if not override["undo"]:
         return None
-    override["redo"] = (override["redo"] + [_core(override)])[-MAX_HISTORY:]
-    prev = override["undo"].pop()
-    override["excluded_slots"] = prev["excluded_slots"]
-    override["adjusted"] = prev["adjusted"]
+    entry = override["undo"].pop()
+    if entry["kind"] == "override":
+        override["redo"] = (override["redo"] + [{"kind": "override", "state": _core(override)}])[-MAX_HISTORY:]
+        override["excluded_slots"] = entry["state"]["excluded_slots"]
+        override["adjusted"] = entry["state"]["adjusted"]
+    else:  # add_slot: the config change is the app layer's job
+        override["redo"] = (override["redo"] + [entry])[-MAX_HISTORY:]
     save_override(batch_id, camera_id, photo_stem, override)
-    return override
+    return entry
 
 
 def redo(batch_id, camera_id, photo_stem):
     override = load_override(batch_id, camera_id, photo_stem)
     if not override["redo"]:
         return None
-    override["undo"] = (override["undo"] + [_core(override)])[-MAX_HISTORY:]
-    nxt = override["redo"].pop()
-    override["excluded_slots"] = nxt["excluded_slots"]
-    override["adjusted"] = nxt["adjusted"]
+    entry = override["redo"].pop()
+    if entry["kind"] == "override":
+        override["undo"] = (override["undo"] + [{"kind": "override", "state": _core(override)}])[-MAX_HISTORY:]
+        override["excluded_slots"] = entry["state"]["excluded_slots"]
+        override["adjusted"] = entry["state"]["adjusted"]
+    else:
+        override["undo"] = (override["undo"] + [entry])[-MAX_HISTORY:]
     save_override(batch_id, camera_id, photo_stem, override)
-    return override
+    return entry

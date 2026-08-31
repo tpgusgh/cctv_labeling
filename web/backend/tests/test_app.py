@@ -299,9 +299,9 @@ def test_delete_all_removes_slot_from_config_and_logs_reject(tmp_path, monkeypat
     assert labels[0]["polygon"] == victim["polygon_raw"]
 
 
-def test_adjust_center_scale_preserves_plane_shape(tmp_path, monkeypatch):
-    # shape-preserving edit: scale only changes w/h multiplicatively, the
-    # plane rect (tilted on-screen shape) is otherwise untouched.
+def test_adjust_quad_raw_pins_label_exactly(tmp_path, monkeypatch):
+    # screen-space pin: an edited label quad is stored and rendered verbatim
+    # (plane round-trips drifted/warped tilted labels on every edit).
     batch_id, photo_stem = _seed_labeled_photo(tmp_path, monkeypatch)
     client = _client()
     _isolate_review_store(tmp_path, monkeypatch)
@@ -312,18 +312,17 @@ def test_adjust_center_scale_preserves_plane_shape(tmp_path, monkeypatch):
     import storage as storage_module
     config = SlotConfig.load(str(storage_module.config_path(SAMPLE_CAMERA)))
     slot = config.slots[0]
-    before = pipeline._label_box_plane(config, {}, slot["id"])
+    quad = [[100.0, 100.0], [140.0, 104.0], [136.0, 190.0], [96.0, 186.0]]
 
     r = client.post(
         f"/api/batches/{batch_id}/cameras/{SAMPLE_CAMERA}/photos/{photo_stem}/labels/{slot['id']}",
-        json={"action": "adjust", "scale": [2.0, 0.5]})
+        json={"action": "adjust", "quad_raw": quad})
     assert r.status_code == 200
 
-    box = overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)["adjusted"][slot["id"]]
-    assert box["w"] == pytest.approx(before[2] * 2.0)
-    assert box["h"] == pytest.approx(before[3] * 0.5)
-    assert box["cx"] == pytest.approx(before[0])
-    assert box["cy"] == pytest.approx(before[1])
+    override = overrides.load_override(batch_id, SAMPLE_CAMERA, photo_stem)
+    assert override["adjusted"][slot["id"]] == {"quad_raw": quad}
+    # rendering/UI must return the pinned quad verbatim
+    assert pipeline.label_box_raw_pixels(config, slot, slot["id"], override["adjusted"]) == quad
 
 
 def test_undo_redo_roundtrip(tmp_path, monkeypatch):

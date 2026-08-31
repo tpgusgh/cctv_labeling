@@ -115,16 +115,47 @@ def _label_box_plane(config, adjusted_slots, slot_id):
     return cx, cy, w, h
 
 
+def _raw_quad_override(config, adjusted_slots, slot_id):
+    """A user-pinned raw-pixel label quad, if one exists (per-photo override
+    first, then the slot's saved default). Interactive move/resize edits are
+    stored as raw quads: round-tripping every edit through the slot plane
+    made the on-screen box drift and change size (fisheye reprojection), so
+    an edited label stays EXACTLY where the user put it, in pixels."""
+    box = (adjusted_slots or {}).get(slot_id)
+    if box and box.get("quad_raw"):
+        return box["quad_raw"]
+    slot = next((s for s in config.slots if s["id"] == slot_id), None)
+    slot_box = (slot or {}).get("label_box")
+    if slot_box and slot_box.get("quad_raw"):
+        return slot_box["quad_raw"]
+    return None
+
+
 def label_box_raw_pixels(config, slot, slot_id, adjusted_slots=None):
     """A slot's current label box, as a raw-image-pixel quad -- lets the
     results web UI draw/edit label placement directly on the original
     uploaded photo instead of a separate rectified-patch popup."""
+    quad = _raw_quad_override(config, adjusted_slots, slot_id)
+    if quad is not None:
+        return quad
     view, homography = _prepare_slot_view(config, slot, slot_id)
     cx, cy, w, h = _label_box_plane(config, adjusted_slots, slot_id)
     corners_norm = [[cx - w / 2, cy - h / 2], [cx + w / 2, cy - h / 2],
                     [cx + w / 2, cy + h / 2], [cx - w / 2, cy + h / 2]]
     corners_local = plane_points_to_pixel(homography, corners_norm)
     return view.local_to_raw(corners_local).tolist()
+
+
+def _draw_raw_quad_label(image, quad, label_spec):
+    """Draw a label quad directly in raw-image pixels (same style as
+    renderer.render_label, minus the local-view round trip)."""
+    color = tuple(int(c) for c in label_spec["color"])
+    alpha = float(label_spec.get("alpha", 1.0))
+    border_width = int(label_spec.get("border_width", 3))
+    poly = np.asarray(quad, dtype=np.float64).reshape(-1, 1, 2).astype(np.int32)
+    overlay = image.copy()
+    cv2.polylines(overlay, [poly], isClosed=True, color=color, thickness=border_width, lineType=cv2.LINE_AA)
+    return cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
 
 
 def _quads_overlap(quad_a, quad_b):
@@ -182,6 +213,12 @@ def run_auto_all(config_path, raw_image_path, output_path, excluded_slots=None, 
             results[slot_id] = "skipped-overlap"
             continue
         try:
+            pinned_quad = _raw_quad_override(config, adjusted_slots, slot_id)
+            if pinned_quad is not None:
+                # user-pinned raw quad: draw exactly where it was placed
+                result_image = _draw_raw_quad_label(result_image, pinned_quad, config.label_spec)
+                results[slot_id] = "labeled"
+                continue
             view, homography = _prepare_slot_view(config, slot, slot_id)
             label_spec = dict(config.label_spec)
             cx, cy, w, h = _label_box_plane(config, adjusted_slots, slot_id)

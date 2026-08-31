@@ -57,13 +57,12 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     return { left: b.left * scale, top: b.top * scale, width: b.width * scale, height: b.height * scale }
   }
 
-  // 모양 보존 편집: 라벨의 기울어진 평면 사각형(w,h)은 그대로 두고 중심
-  // 이동/배율만 보냄 -- 화면 bbox를 매번 재변환하면 기울어진 라벨 모양이
-  // 뭉개졌음.
-  async function sendBoxUpdate(slotId, centerRaw, scaleFactors, applyAll) {
+  // 화면 좌표 고정 편집: 편집된 라벨 사각형을 픽셀 그대로 보냄. 평면 좌표
+  // 왕복 변환은 어안 재투영 때문에 이동만 해도 크기/위치가 출렁였음 (실측).
+  async function sendQuad(slotId, quadRaw, applyAll) {
     try {
       await editLabel(batchId, cameraId, photo.photo, slotId, applyAll ? 'adjust_all' : 'adjust', {
-        center_raw: centerRaw, scale: scaleFactors,
+        quad_raw: quadRaw,
       })
       setError(null)
       onChanged()
@@ -83,9 +82,8 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
       const dx = finished.x1 - finished.x0
       const dy = finished.y1 - finished.y0
       if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return
-      const b = finished.bbox
-      const centerRaw = toRaw(b.left + b.width / 2 + dx, b.top + b.height / 2 + dy)
-      await sendBoxUpdate(finished.slotId, centerRaw, null, shiftHeld)
+      const quadRaw = finished.quad.map(([x, y]) => [x + dx / scale, y + dy / scale])
+      await sendQuad(finished.slotId, quadRaw, shiftHeld)
       return
     }
 
@@ -94,11 +92,12 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
       const newW = Math.abs(finished.x1 - ax)
       const newH = Math.abs(finished.y1 - ay)
       if (newW < 6 || newH < 6) return
-      const b = finished.bbox
-      const fw = newW / b.width
-      const fh = newH / b.height
-      const centerRaw = toRaw((ax + finished.x1) / 2, (ay + finished.y1) / 2)
-      await sendBoxUpdate(finished.slotId, centerRaw, [fw, fh], shiftHeld)
+      const fw = newW / finished.bbox.width
+      const fh = newH / finished.bbox.height
+      const [axr, ayr] = toRaw(ax, ay)
+      // 앵커(반대쪽 모서리) 기준으로 사각형 자체를 배율 -- 모양(기울기) 유지
+      const quadRaw = finished.quad.map(([x, y]) => [axr + (x - axr) * fw, ayr + (y - ayr) * fh])
+      await sendQuad(finished.slotId, quadRaw, shiftHeld)
       return
     }
 
@@ -173,7 +172,7 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
       if (slot?.box_raw) {
         const d = displayBounds(slot)
         if (px >= d.left && px <= d.left + d.width && py >= d.top && py <= d.top + d.height) {
-          setDrag({ kind: 'move', slotId: selected, x0: px, y0: py, x1: px, y1: py, bbox: d })
+          setDrag({ kind: 'move', slotId: selected, x0: px, y0: py, x1: px, y1: py, bbox: d, quad: slot.box_raw })
           return
         }
       }
@@ -199,8 +198,7 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
     const slotId = selectedRef.current
     const slot = slotId && slotById(slotId)
     if (!slot?.box_raw) return
-    const b = boxBounds(slot.box_raw)
-    await sendBoxUpdate(slotId, [b.left + b.width / 2 + dxRaw, b.top + b.height / 2 + dyRaw], null, false)
+    await sendQuad(slotId, slot.box_raw.map(([x, y]) => [x + dxRaw, y + dyRaw]), false)
   }
 
   useEffect(() => {
@@ -394,7 +392,7 @@ function PhotoEditor({ batchId, cameraId, photo, onChanged }) {
               onMouseDown={(e) => {
                 e.stopPropagation()
                 const opposite = corners[(i + 2) % 4]
-                setDrag({ kind: 'resize', slotId: selectedSlot.id, anchor: opposite, x1: hx, y1: hy, bbox: d })
+                setDrag({ kind: 'resize', slotId: selectedSlot.id, anchor: opposite, x1: hx, y1: hy, bbox: d, quad: selectedSlot.box_raw })
               }}
               style={{
                 position: 'absolute', left: hx - 5, top: hy - 5, width: 10, height: 10,
