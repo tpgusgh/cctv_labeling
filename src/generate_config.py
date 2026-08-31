@@ -138,6 +138,20 @@ def generate_config(camera_id, frames_dir, output_path, cx=None, cy=None, f=None
         # more labeled data isn't readily available.
         classical_detections = detect_slots(median, calibration, classifier=classifier)
         detections = merge_detections(yolo_detections, classical_detections)
+        # row-adjacency rescue: a sub-threshold model detection sitting right
+        # next to a confirmed slot (slots come in contiguous rows) is almost
+        # always a real slot the model undersold -- measured 5 real slots
+        # rescued / 0 junk across the 23 production cameras. Isolated weak
+        # detections stay dropped. See src/row_inference.py.
+        import row_inference
+        low_conf = yolo_slot_detector.detect_slots(median, yolo_model, conf=0.05)
+        weak = [d for d in low_conf if d["confidence"] < 0.25]
+        weak = [d for d in weak
+                if not any(_same_slot(_polygon_bbox(d["polygon"]), _polygon_bbox(kept["polygon"]), 0.4)
+                            for kept in detections)]
+        rescued = row_inference.rescue_row_adjacent(weak, detections, (calibration.cx, calibration.cy))
+        if rescued:
+            detections = merge_detections(detections, rescued)
     else:
         detections = detect_slots(median, calibration, classifier=classifier)
     # the camera hangs over the driving area and every bay sits on the outer
