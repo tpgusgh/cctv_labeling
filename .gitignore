@@ -15,11 +15,18 @@ __pycache__/
 .venv/
 venv/
 
-# model weights
+# model weights (trained checkpoints actually used by the app are allowlisted
+# below -- everything else, e.g. retrain_yolo.py's archived candidates and
+# manual iteration snapshots, stays ignored so the repo doesn't accumulate
+# near-duplicate multi-MB blobs)
 *.pt
 *.onnx
 /models/*/weights/
+/models/archive/
 models/*.joblib
+!models/yolov8_seg_slots_production.pt
+!models/yolov8_pose_marking_points.pt
+!models/slot_classifier.joblib
 
 # ultralytics training run artifacts (logs, plots, checkpoints)
 /runs/
@@ -34,7 +41,6 @@ models/*.joblib
 /label
 /output
 /review
-/models
 /.venv
 /origin_no_label
 /origin_no_label2

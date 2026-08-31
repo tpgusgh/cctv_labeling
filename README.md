@@ -228,7 +228,10 @@ src/
 web/
   backend/           Flask API (업로드 -> 탐지 -> 라벨링 -> 결과/수정/다운로드)
   frontend/          React (Vite) — 업로드/진행/결과 페이지, 슬롯 추가·조정·삭제
-models/            학습된 체크포인트 (slot_classifier.joblib, yolov8_seg_slots_v6.pt)
+models/            학습된 체크포인트 — 실제 운영에 쓰는 3개만 git에 커밋됨
+                   (slot_classifier.joblib, yolov8_seg_slots_production.pt,
+                   yolov8_pose_marking_points.pt/실험용). retrain_yolo.py가
+                   만드는 후보/구버전 스냅샷(v2~v8, archive/)은 gitignore 유지.
 tests/             pytest, 실제 샘플 이미지 기반
 config/            카메라별 config JSON (자동 생성 + 웹/리뷰로 다듬음)
 review/            리뷰 로그 (labels/candidates/missed/web_flags .jsonl + crops/)
