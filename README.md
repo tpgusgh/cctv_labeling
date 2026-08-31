@@ -243,6 +243,21 @@ output/            배치 처리 결과 (gitignore)
 추가는 승인 기록으로 남아 재학습 데이터가 됨. 위치 조정 드래그를 Shift 누른
 채 놓으면 그 위치가 슬롯 기본값으로 저장되어 모든 사진/배치에 적용됨.
 
+## 재학습 (수정 기록 100건쯤 쌓이면)
+
+웹에서 한 수정(Shift+×, 슬롯 추가, 승인/거부)이 전부 학습 데이터로
+쌓이므로, 주기적으로 이거 한 줄만 실행하면 모델이 좋아짐:
+
+```bash
+.venv/bin/python src/retrain_yolo.py
+```
+
+자동으로 데이터셋 추출 → 현재 운영 모델에서 파인튜닝(약 1시간) → 성능
+자동 비교 → **더 좋을 때만** 운영 모델(`models/yolov8_seg_slots_production.pt`)
+교체. 지든 이기든 모든 체크포인트는 `models/archive/`에 보관(롤백 가능).
+끝나면 `./run_web.sh`로 웹앱 재시작만 하면 적용. 자세한 건
+`docs/COMMANDS.md` 7-4절.
+
 ## 알려진 한계
 
 - 슬롯 좌표는 자동 생성됨(`generate_config.py` + YOLOv8-seg/classical CV
