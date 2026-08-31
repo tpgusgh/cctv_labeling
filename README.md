@@ -208,8 +208,15 @@ COCO 학습 YOLO가 이 카메라 각도에서 실패했던 것과 같은 이유
 ```
 src/
   calibration.py      어안렌즈 보정 (전역 2D 모델 + 슬롯별 로컬 gnomonic 뷰)
-  slot_detection.py    median 스택 + 슬롯 폴리곤 자동 탐지
+  slot_detection.py    median 스택 + 슬롯 폴리곤 자동 탐지 + 탐지기 앙상블 병합
+  yolo_slot_detector.py YOLOv8-seg 체크포인트 로드/추론 (classical CV와 앙상블)
   generate_config.py   카메라 프레임 폴더 -> config JSON 자동 생성 CLI
+                       (거부 이력 지역 자동 억제, 탐지기 합의 자동 승인 포함)
+  review_store.py      승인/거부/미탐/웹플래그 JSONL 저장소 (최신 결정 우선)
+  review_server.py     후보 승인/거부 리뷰 웹 UI (stdlib http.server, a/r 단축키)
+  train_from_reviews.py 리뷰 라벨로 slot_classifier 재학습
+  export_yolo_dataset.py 리뷰 라벨 -> YOLO-seg 학습 데이터셋 export
+  train_yolo_seg.py    YOLOv8-seg 파인튜닝 CLI (MPS/CUDA 자동 선택)
   parking_slot.py  카메라별 슬롯 config 로드/저장
   perspective.py   정규화 좌표 <-> 픽셀 homography (양방향)
   renderer.py      라벨 도형 직접 그리기 (PNG 에셋 없음)
@@ -218,19 +225,33 @@ src/
   pipeline.py         오케스트레이션 (run() 수동 / run_auto() 슬롯1개 자동 / run_auto_all() 전체 슬롯 자동)
   main.py             CLI 진입점 (--candidate-u/-v 수동, --auto, --auto-all)
   batch_processor.py  카메라 폴더 전체 일괄 처리, output/review 분류 + JSON 로그
+web/
+  backend/           Flask API (업로드 -> 탐지 -> 라벨링 -> 결과/수정/다운로드)
+  frontend/          React (Vite) — 업로드/진행/결과 페이지, 슬롯 추가·조정·삭제
+models/            학습된 체크포인트 (slot_classifier.joblib, yolov8_seg_slots_v6.pt)
 tests/             pytest, 실제 샘플 이미지 기반
-config/            카메라별 config JSON (직접 작성)
+config/            카메라별 config JSON (자동 생성 + 웹/리뷰로 다듬음)
+review/            리뷰 로그 (labels/candidates/missed/web_flags .jsonl + crops/)
 docs/superpowers/  설계 문서(spec)와 구현 계획(plan) 이력
 label/, no_label/  원본 CCTV 참고 자료 (gitignore, 커밋 안 함)
-output/, review/   배치 처리 결과 (gitignore)
+output/            배치 처리 결과 (gitignore)
 ```
+
+웹앱 실행: `./run_web.sh` → `http://localhost:5050` (사진 업로드 → 자동
+탐지/라벨링 → 결과 확인/수정 → zip 다운로드). 결과 페이지에서 ×는 해당
+사진에서만 가림, Shift+×는 모든 사진에서 삭제 + 재탐지 억제 기록, 슬롯
+추가는 승인 기록으로 남아 재학습 데이터가 됨. 위치 조정 드래그를 Shift 누른
+채 놓으면 그 위치가 슬롯 기본값으로 저장되어 모든 사진/배치에 적용됨.
 
 ## 알려진 한계
 
-- 슬롯 좌표는 이제 자동 생성됨(`generate_config.py`) — 단, 차선 방향
-  화살표/볼라드 경고 구역처럼 슬롯이 아닌 다른 바닥 표시를 슬롯으로
-  오탐할 수 있음 (위 "슬롯 config 자동 생성" 절 참고). GUI는 아직 없음.
-- 카메라별 `f` 값도 수동 추정/입력 필요 (`fit()` 함수는 있으나 CLI 미노출).
+- 슬롯 좌표는 자동 생성됨(`generate_config.py` + YOLOv8-seg/classical CV
+  앙상블) — 단, 천장 구조물/녹색 바닥 도색/바닥 화살표 같은 비슬롯 표시를
+  여전히 오탐할 수 있어 사람 검수(웹 결과 페이지 또는 review_server)가
+  전제임. 한번 거부한 위치는 재탐지에서 자동으로 걸러짐.
+- 카메라별 `f`/`radius`는 프레임 크기에서 자동 유도 (640x640 실측값을
+  비례 스케일) — 렌즈가 크게 다른 카메라는 `--cx/--cy/--f/--radius` 수동
+  지정 필요.
 - 앞유리 탐지는 실제 프레임 1장 기준으로 튜닝한 고정 threshold — 같은 프레임에서
   차량 1대에 배경 노이즈(바닥 반사광 줄무늬, 그림자 등) blob이 18개까지 잡힘.
   길쭉한 반사광 줄무늬는 aspect-ratio 필터(2.5:1 초과 제외)로 6개 걸러짐(18→12),
@@ -241,5 +262,5 @@ output/, review/   배치 처리 결과 (gitignore)
 - 고정 크기 로컬 패치(`pipeline.py`의 `DEFAULT_PATCH_SIZE`/`DEFAULT_LOCAL_F`)가
   슬롯 크기 상한을 만듦 — 이 카메라 기준 raw 픽셀로 약 142x142 정도. 실제
   주차 슬롯이 이보다 크면 `DEFAULT_LOCAL_F`를 낮춰야 함.
-- 여러 카메라를 한번에 처리하는 기능, GUI 전부 없음 — 카메라 1개씩 배치
-  처리는 되지만 여러 카메라를 도는 상위 오케스트레이션은 아직 없음.
+- 웹앱이 여러 카메라 폴더 업로드를 한번에 처리함 (폴더별로 카메라 분리,
+  백그라운드 잡 4개 병렬). CLI 쪽은 여전히 카메라 1개씩.

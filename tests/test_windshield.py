@@ -2,9 +2,30 @@ import numpy as np
 import cv2
 
 from calibration import CalibrationModel
-from windshield import detect_windshields, confidence_score, WindshieldBlob
+from windshield import (
+    detect_windshields, confidence_score, WindshieldBlob,
+    _adaptive_dark_threshold, MIN_DARK_THRESHOLD, MAX_DARK_THRESHOLD,
+)
 
 CAR_SAMPLE_IMAGE = "no_label/P1_B1_1_21/20260820_115029.jpg"
+
+
+def test_adaptive_dark_threshold_does_not_saturate_on_a_real_frame():
+    raw = cv2.imread(CAR_SAMPLE_IMAGE)
+    assert raw is not None
+    gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+    mask = np.zeros(gray.shape, dtype=np.uint8)
+    cv2.circle(mask, (320, 320), 320, 255, -1)
+
+    threshold = _adaptive_dark_threshold(gray, mask)
+
+    # regression guard: an earlier Otsu-based implementation saturated to
+    # MAX_DARK_THRESHOLD on nearly every real frame tested (floor pixels
+    # dominate the masked area, so Otsu split the floor's own brightness
+    # instead of separating floor from object) -- a healthy adaptive
+    # threshold should land with real margin inside the clamp, not pinned
+    # to an edge.
+    assert MIN_DARK_THRESHOLD + 5 < threshold < MAX_DARK_THRESHOLD - 5
 
 
 def test_detect_windshields_finds_at_least_one_blob_in_real_car_frame():

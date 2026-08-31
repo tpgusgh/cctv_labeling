@@ -20,7 +20,8 @@ def _auto_device():
     return "cpu"
 
 
-def train(data_yaml, base_model="yolov8n-seg.pt", epochs=100, device=None, hsv_v=0.6, mosaic=0.0):
+def train(data_yaml, base_model="yolov8n-seg.pt", epochs=100, device=None, hsv_v=0.6, mosaic=0.0,
+          degrees=180.0, flipud=0.5):
     """hsv_v/mosaic default away from ultralytics' own defaults (0.4/1.0) for
     this project specifically:
     - hsv_v=0.6 (up from 0.4): stronger brightness/exposure jitter, aimed at
@@ -36,10 +37,16 @@ def train(data_yaml, base_model="yolov8n-seg.pt", epochs=100, device=None, hsv_v
       disconnected fake optical centers, unlike anything the model will
       ever see at real inference time. Left off unless a future dataset
       structure makes this assumption safe again.
+    - degrees=180/flipud=0.5 (ultralytics defaults: 0/0): a ceiling-mounted
+      top-down fisheye scene has no canonical "up" -- rotating the whole
+      frame or flipping it vertically produces an equally valid scene, so
+      these effectively multiply orientation coverage for free. Directly
+      targets the observed weakness: edge slots at unusual orientations
+      coming out flattened/diagonal.
     """
     model = YOLO(base_model)
     model.train(data=data_yaml, epochs=epochs, single_cls=True, device=device or _auto_device(),
-                hsv_v=hsv_v, mosaic=mosaic)
+                hsv_v=hsv_v, mosaic=mosaic, degrees=degrees, flipud=flipud)
     return model
 
 
@@ -72,12 +79,18 @@ def build_parser():
     parser.add_argument("--mosaic", type=float, default=0.0,
                          help="mosaic augmentation probability (0-1). Off by default: it tiles 4 unrelated "
                               "fisheye frames together, which don't share one real optical center.")
+    parser.add_argument("--degrees", type=float, default=180.0,
+                         help="rotation augmentation range. Top-down fisheye has no canonical 'up', so full "
+                              "rotation is a valid scene -- multiplies orientation coverage.")
+    parser.add_argument("--flipud", type=float, default=0.5,
+                         help="vertical flip probability -- also valid for a top-down scene.")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    model = train(args.data, args.base_model, args.epochs, args.device, args.hsv_v, args.mosaic)
+    model = train(args.data, args.base_model, args.epochs, args.device, args.hsv_v, args.mosaic,
+                  args.degrees, args.flipud)
     _save_checkpoint(model, args.output)
     print(f"trained -> {args.output}")
 

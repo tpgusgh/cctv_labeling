@@ -37,3 +37,15 @@ def adjust_slot(batch_id, camera_id, photo_stem, slot_id, box):
     override["adjusted"][slot_id] = box
     save_override(batch_id, camera_id, photo_stem, override)
     return override
+
+
+def restore_slot(batch_id, camera_id, photo_stem, slot_id):
+    """Drop every per-photo override for this slot -- un-hides an excluded
+    label and reverts a per-photo position adjustment back to the slot's
+    default placement."""
+    override = load_override(batch_id, camera_id, photo_stem)
+    if slot_id in override["excluded_slots"]:
+        override["excluded_slots"].remove(slot_id)
+    override["adjusted"].pop(slot_id, None)
+    save_override(batch_id, camera_id, photo_stem, override)
+    return override

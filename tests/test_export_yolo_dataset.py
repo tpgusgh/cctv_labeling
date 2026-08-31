@@ -35,8 +35,10 @@ def test_export_dataset_replicates_camera_polygons_across_all_its_frames(tmp_pat
          "polygon": [[5, 5], [15, 5], [15, 15], [5, 15]]},
     ])
     missed_path = tmp_path / "missed.jsonl"
+    # 10px min side: smaller synthetic quads would be dropped by the
+    # degenerate-quad training filter (is_degenerate_quad, min_short_side=9)
     _write_jsonl(missed_path, [
-        {"id": "m1", "camera_id": "camB", "polygon": [[2, 2], [8, 2], [8, 8], [2, 8]]},
+        {"id": "m1", "camera_id": "camB", "polygon": [[2, 2], [12, 2], [12, 12], [2, 12]]},
     ])
 
     output_dir = tmp_path / "dataset"
@@ -72,10 +74,10 @@ def test_export_dataset_replicates_camera_polygons_across_all_its_frames(tmp_pat
     assert parts[0] == 0  # class id
     assert parts[1:] == pytest.approx([0.0, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5])
 
-    # camB's missed-annotation polygon [[2,2],[8,2],[8,8],[2,8]] on 20x20
+    # camB's missed-annotation polygon [[2,2],[12,2],[12,12],[2,12]] on 20x20
     label_text = (output_dir / "labels" / "train" / "camB__frame1.txt").read_text().strip()
     parts = [float(x) for x in label_text.split()]
-    assert parts[1:] == pytest.approx([0.1, 0.1, 0.4, 0.1, 0.4, 0.4, 0.1, 0.4])
+    assert parts[1:] == pytest.approx([0.1, 0.1, 0.6, 0.1, 0.6, 0.6, 0.1, 0.6])
 
     dataset_yaml = (output_dir / "dataset.yaml").read_text()
     assert "train: images/train" in dataset_yaml

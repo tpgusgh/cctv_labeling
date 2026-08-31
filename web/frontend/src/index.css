@@ -281,7 +281,12 @@ input[type="text"] {
 .photo-card img {
   border-radius: 4px;
   display: block;
-  border: 1px solid var(--border);
+  /* box-shadow, not border -- a border is inside the box model (eats into
+     width/height under box-sizing:border-box), which shifted every overlay
+     box and click/drag coordinate in ResultsPage.jsx by ~1 raw pixel from
+     where the image was actually drawn. box-shadow draws outside the box,
+     so it doesn't touch the element's actual pixel dimensions. */
+  box-shadow: 0 0 0 1px var(--border);
 }
 
 .photo-name {
@@ -290,27 +295,6 @@ input[type="text"] {
   color: var(--text-muted);
   margin: 8px 0 10px;
   letter-spacing: 0.02em;
-}
-
-.slot-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.slot-table td {
-  padding: 4px 6px;
-  border-top: 1px solid var(--border);
-}
-
-.slot-table td:first-child {
-  font-family: var(--font-display);
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.slot-excluded {
-  color: var(--accent-red);
 }
 
 .link-row a {

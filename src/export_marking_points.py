@@ -7,7 +7,8 @@ import cv2
 
 import review_store
 from calibration import CalibrationModel
-from slot_detection import median_stack, is_degenerate_quad
+from marking_point_geometry import derive_marking_points
+from slot_detection import median_stack
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
@@ -19,32 +20,37 @@ def _polygons_by_camera(labels_path, missed_path):
             by_camera[record["camera_id"]].append(record["polygon"])
     for record in review_store.load_missed_annotations(missed_path):
         by_camera[record["camera_id"]].append(record["polygon"])
-    # squashed/folded quads must not become training positives -- the model
-    # learns to reproduce them at the fisheye edge instead of properly
-    # tilted rectangles ("납작해진거는 학습하지마").
-    return {cam: [p for p in polys if not is_degenerate_quad(p)]
-            for cam, polys in by_camera.items()}
+    return by_camera
 
 
-def _write_label_file(path, polygons, width, height):
+def _write_pose_label_file(path, polygons, width, height):
     lines = []
     for polygon in polygons:
-        coords = " ".join(f"{x / width:.6f} {y / height:.6f}" for x, y in polygon)
-        lines.append(f"0 {coords}")
+        try:
+            p1, p2, _ = derive_marking_points(polygon)
+        except ValueError:
+            # not a 4-point quad -- skip, this export only trains on
+            # instances with a well-defined entrance edge
+            continue
+        xs = [pt[0] for pt in polygon]
+        ys = [pt[1] for pt in polygon]
+        cx = (min(xs) + max(xs)) / 2 / width
+        cy = (min(ys) + max(ys)) / 2 / height
+        w = (max(xs) - min(xs)) / width
+        h = (max(ys) - min(ys)) / height
+        x1, y1 = p1[0] / width, p1[1] / height
+        x2, y2 = p2[0] / width, p2[1] / height
+        lines.append(f"0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f} {x1:.6f} {y1:.6f} 2 {x2:.6f} {y2:.6f} 2")
     path.write_text("\n".join(lines) + "\n")
 
 
 def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PATH,
                     missed_path=review_store.MISSED_PATH, image_extensions=IMAGE_EXTENSIONS, val_every=5,
                     calibration=None):
-    """calibration: optional CalibrationModel. Real slot corners in this
-    project's cameras sit mostly near the fisheye edge (median ~78% of the
-    radius out from center), where distortion is worst. When given, every
-    exported image is globally dewarped and every polygon is mapped through
-    calibration.undistort_points() to match -- so training sees the same
-    "flattened" view generate_config.py/yolo_slot_detector.py run inference
-    on when passed the same calibration. Default None exports raw frames/
-    coordinates unchanged (existing behavior)."""
+    """Same camera-level train/val split and median-stack composite as
+    export_yolo_dataset.py, but writes YOLO-pose labels (2 entrance
+    marking-point keypoints per slot) instead of whole-polygon
+    segmentation labels -- see marking_point_geometry for why."""
     no_label_dir = Path(no_label_dir)
     output_dir = Path(output_dir)
 
@@ -60,10 +66,6 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
     summary = {"train_cameras": train_cameras, "val_cameras": val_cameras,
                "train_images": 0, "val_images": 0}
 
-    # A camera can move between train/val across re-runs (different
-    # val_every, or new review data changing the sorted camera order).
-    # Clear stale output before re-writing so it doesn't end up copied into
-    # both splits, which would defeat the camera-level train/val split.
     shutil.rmtree(output_dir / "images", ignore_errors=True)
     shutil.rmtree(output_dir / "labels", ignore_errors=True)
 
@@ -96,13 +98,9 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
                     cv2.imwrite(str(dest_path), image)
                 else:
                     shutil.copy2(frame_path, dest_path)
-                _write_label_file(labels_dir / f"{dest_name}.txt", polygons, width, height)
+                _write_pose_label_file(labels_dir / f"{dest_name}.txt", polygons, width, height)
                 summary[f"{split}_images"] += 1
 
-            # Inference (generate_config.py) runs on the median-stacked
-            # composite of a camera's frames, not on raw frames -- without
-            # this, the model never sees the image type it's actually run
-            # on at inference time (train/inference domain mismatch).
             if frame_paths:
                 median = median_stack(frame_paths)
                 if calibration is not None:
@@ -110,13 +108,14 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
                 height, width = median.shape[:2]
                 dest_name = f"{camera_id}__median"
                 cv2.imwrite(str(images_dir / f"{dest_name}.jpg"), median)
-                _write_label_file(labels_dir / f"{dest_name}.txt", polygons, width, height)
+                _write_pose_label_file(labels_dir / f"{dest_name}.txt", polygons, width, height)
                 summary[f"{split}_images"] += 1
 
     (output_dir / "dataset.yaml").write_text(
         f"path: {output_dir.resolve()}\n"
         "train: images/train\n"
         "val: images/val\n"
+        "kpt_shape: [2, 3]\n"
         "names:\n"
         "  0: parking_slot\n"
     )
@@ -126,7 +125,7 @@ def export_dataset(no_label_dir, output_dir, labels_path=review_store.LABELS_PAT
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Export review_store's labeled polygons into a YOLO-seg training dataset.")
+        description="Export review_store's labeled polygons into a YOLO-pose marking-point training dataset.")
     parser.add_argument("--no-label-dir", default="no_label")
     parser.add_argument("--output", required=True)
     parser.add_argument("--labels", default=str(review_store.LABELS_PATH))
@@ -138,9 +137,8 @@ def build_parser():
     parser.add_argument("--radius", type=float, default=320.0)
     parser.add_argument("--dewarp", action="store_true",
                          help="globally dewarp frames/coordinates before export instead of exporting raw "
-                              "(tried and abandoned as the default: the equidistant fisheye model's tan() "
-                              "singularity sits right where real slot corners are, blowing labels far out "
-                              "of bounds -- see project memory / docs/superpowers specs before re-enabling)")
+                              "(abandoned as the default for the seg pipeline -- see export_yolo_dataset.py "
+                              "and project memory; same fisheye-singularity risk applies here)")
     return parser
 
 

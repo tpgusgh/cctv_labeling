@@ -2,13 +2,37 @@ import argparse
 import json
 from pathlib import Path
 
+from generate_config import REVIEW_CONFIDENCE_THRESHOLD
+from parking_slot import SlotConfig
 from pipeline import run_auto_all
 
-IMAGE_EXTENSIONS = ("*.jpg", "*.jpeg", "*.png")
+# ponytail: matched by lowercased suffix, not a glob pattern -- glob is
+# case-sensitive on every platform regardless of the filesystem's own case
+# sensitivity, so a real "*.JPG" export would otherwise be silently skipped
+# (see generate_config.py's IMAGE_EXTENSIONS for the bug this was verified
+# against).
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 
-def _needs_review(results):
-    return any(status.startswith("error") or status.startswith("review") for status in results.values())
+def _needs_review(results, config):
+    # a bare status prefix check for "review" was dead code -- run_auto_all
+    # only ever emits "excluded"/"labeled"/"error: ..." per slot, it never
+    # emits anything starting with "review". Per-slot confidence (already
+    # computed at detection time, see generate_config.py) never actually
+    # reached this per-photo pipeline, so low-confidence detections were
+    # silently baked into "successful" output with no human review flag.
+    if any(status.startswith("error") for status in results.values()):
+        return True
+    if not results:
+        return True
+    if config is None:
+        return False
+    confidence_by_slot = {s["id"]: s.get("confidence") for s in config.slots}
+    return any(
+        status == "labeled" and confidence_by_slot.get(slot_id) is not None
+        and confidence_by_slot[slot_id] < REVIEW_CONFIDENCE_THRESHOLD
+        for slot_id, status in results.items()
+    )
 
 
 def process_camera_folder(config_path, input_dir, output_dir, review_dir, log_path):
@@ -18,7 +42,12 @@ def process_camera_folder(config_path, input_dir, output_dir, review_dir, log_pa
     output_dir.mkdir(parents=True, exist_ok=True)
     review_dir.mkdir(parents=True, exist_ok=True)
 
-    image_paths = sorted({p for pattern in IMAGE_EXTENSIONS for p in input_dir.glob(pattern)})
+    try:
+        config = SlotConfig.load(config_path)
+    except (FileNotFoundError, OSError, ValueError):
+        config = None
+
+    image_paths = sorted(p for p in input_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
 
     log_entries = []
     for image_path in image_paths:
@@ -34,7 +63,7 @@ def process_camera_folder(config_path, input_dir, output_dir, review_dir, log_pa
             })
             continue
 
-        if _needs_review(results):
+        if _needs_review(results, config):
             final_path = review_dir / f"{image_path.stem}.png"
             candidate_output.replace(final_path)
             status = "review"

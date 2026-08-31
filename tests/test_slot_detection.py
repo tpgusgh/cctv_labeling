@@ -3,7 +3,7 @@ import glob
 import numpy as np
 
 from calibration import CalibrationModel
-from slot_detection import median_stack, detect_slots, fit_quad
+from slot_detection import median_stack, detect_slots, fit_quad, merge_detections
 
 CAMERA_FOLDER = "no_label/P1_B1_1_9"
 
@@ -76,5 +76,109 @@ def test_detect_slots_finds_plausible_candidates_in_real_camera_folder():
     for d in detections:
         assert len(d["polygon"]) == 4
         assert 0.0 <= d["confidence"] <= 1.0
+
+
+def test_merge_detections_keeps_non_overlapping_slots_from_both_lists():
+    a = [{"polygon": [[0, 0], [10, 0], [10, 10], [0, 10]], "confidence": 0.9}]
+    b = [{"polygon": [[100, 100], [110, 100], [110, 110], [100, 110]], "confidence": 0.5}]
+
+    merged = merge_detections(a, b)
+
+    assert len(merged) == 2
+    assert {tuple(map(tuple, d["polygon"])) for d in merged} == {
+        ((0, 0), (10, 0), (10, 10), (0, 10)),
+        ((100, 100), (110, 100), (110, 110), (100, 110)),
+    }
+
+
+def test_merge_detections_dedupes_overlapping_slots_keeping_higher_confidence():
+    low_conf = {"polygon": [[0, 0], [10, 0], [10, 10], [0, 10]], "confidence": 0.4}
+    high_conf = {"polygon": [[1, 1], [11, 1], [11, 11], [1, 11]], "confidence": 0.95}
+
+    merged = merge_detections([low_conf], [high_conf])
+
+    assert len(merged) == 1
+    assert merged[0]["polygon"] == high_conf["polygon"]
+    assert merged[0]["confidence"] == high_conf["confidence"]
+    # both input lists had a candidate here -- independent agreement
+    assert merged[0]["agreement_count"] == 2
+
+
+def test_merge_detections_tags_agreement_count_of_one_for_a_lone_detection():
+    a = [{"polygon": [[0, 0], [10, 0], [10, 10], [0, 10]], "confidence": 0.9}]
+    b = [{"polygon": [[100, 100], [110, 100], [110, 110], [100, 110]], "confidence": 0.5}]
+
+    merged = merge_detections(a, b)
+
+    assert all(d["agreement_count"] == 1 for d in merged)
+
+
+def test_merge_detections_dedupes_same_centroid_despite_low_bbox_iou():
+    # two detectors can fit very differently-shaped quads to the same
+    # physical slot (verified against real production configs: the same
+    # slot detected twice with centroids a few px apart but bbox IoU as low
+    # as 0.3, both surviving the old IoU-only dedup) -- centroid proximity
+    # must catch this even when bbox IoU stays under iou_threshold.
+    wide_low_conf = {"polygon": [[0, 0], [40, 0], [40, 40], [0, 40]], "confidence": 0.4}
+    tight_high_conf = {"polygon": [[10, 10], [30, 10], [30, 30], [10, 30]], "confidence": 0.95}
+    from slot_detection import _bbox_iou, _polygon_bbox
+    assert _bbox_iou(_polygon_bbox(wide_low_conf["polygon"]), _polygon_bbox(tight_high_conf["polygon"])) < 0.4
+
+    merged = merge_detections([wide_low_conf], [tight_high_conf])
+
+    assert len(merged) == 1
+    assert merged[0]["polygon"] == tight_high_conf["polygon"]
+    assert merged[0]["agreement_count"] == 2
+
+
+def test_regularize_quad_squares_up_a_skewed_quad_and_keeps_a_clean_rect():
+    from slot_detection import regularize_quad
+    calibration = CalibrationModel(cx=320, cy=320, f=204, radius=320)
+
+    # a clean axis-aligned rect near the center must come back essentially unchanged
+    rect = [[300.0, 200.0], [340.0, 200.0], [340.0, 290.0], [300.0, 290.0]]
+    snapped = np.array(regularize_quad(rect, calibration))
+    assert snapped.shape == (4, 2)
+    assert np.all(np.isfinite(snapped))
+    assert np.allclose(sorted(snapped[:, 0]), sorted(np.array(rect)[:, 0]), atol=3.0)
+
+    # a skewed parallelogram (straight slot fitted diagonally in raw space)
+    # must snap to a rectangle: in the local view its corners form right angles
+    skewed = [[300.0, 200.0], [340.0, 208.0], [332.0, 290.0], [292.0, 282.0]]
+    out = np.array(regularize_quad(skewed, calibration))
+    from calibration import LocalView
+    view = LocalView.centered_on(calibration, tuple(out.mean(axis=0)), (300, 300), 300.0)
+    local = np.array(view.raw_to_local(out))
+    for i in range(4):
+        a = local[i] - local[(i + 1) % 4]
+        b = local[(i + 2) % 4] - local[(i + 1) % 4]
+        cos = abs(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+        assert cos < 0.05  # right angle within ~3 degrees
+
+
+def test_is_degenerate_quad_flags_bowtie_and_keeps_tilted_thin_slot():
+    from slot_detection import is_degenerate_quad
+    # bowtie: corners in Z order self-intersect, shoelace area collapses
+    bowtie = [[0, 0], [40, 0], [0, 30], [40, 30]]
+    assert is_degenerate_quad(bowtie)
+    # folded/near-flat sliver
+    flat = [[0, 0], [80, 2], [82, 6], [1, 4]]
+    assert is_degenerate_quad(flat)
+    # a real fisheye-edge slot: thin (16px) and heavily tilted, but a clean
+    # convex quad -- must NOT be flagged (verified real slots like this exist)
+    tilted_thin = [[100, 100], [116, 104], [96, 190], [80, 186]]
+    assert not is_degenerate_quad(tilted_thin)
+    # ordinary upright slot
+    normal = [[0, 0], [40, 0], [40, 90], [0, 90]]
+    assert not is_degenerate_quad(normal)
+
+
+def test_merge_detections_handles_empty_lists():
+    assert merge_detections([], []) == []
+    only = [{"polygon": [[0, 0], [10, 0], [10, 10], [0, 10]], "confidence": 0.7}]
+    merged = merge_detections(only, [])
+    assert len(merged) == 1
+    assert merged[0]["polygon"] == only[0]["polygon"]
+    assert merged[0]["agreement_count"] == 1
 
 

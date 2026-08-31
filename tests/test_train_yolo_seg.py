@@ -18,7 +18,7 @@ def test_train_calls_YOLO_train_with_explicit_device(monkeypatch):
     assert calls["base_model"] == "yolov8n-seg.pt"
     assert calls["train_kwargs"] == {
         "data": "dataset.yaml", "epochs": 5, "single_cls": True, "device": "cpu",
-        "hsv_v": 0.6, "mosaic": 0.0,
+        "hsv_v": 0.6, "mosaic": 0.0, "degrees": 180.0, "flipud": 0.5,
     }
 
 

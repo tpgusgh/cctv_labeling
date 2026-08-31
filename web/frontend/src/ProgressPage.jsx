@@ -3,22 +3,37 @@ import { getBatchStatus } from './api.js'
 
 export default function ProgressPage({ batchId, cameras, onAllDone }) {
   const [statuses, setStatuses] = useState(cameras.map((c) => ({ ...c, status: 'queued' })))
+  const [pollError, setPollError] = useState(null)
 
   useEffect(() => {
     let cancelled = false
-    const interval = setInterval(async () => {
-      const data = await getBatchStatus(batchId)
-      if (cancelled) return
-      setStatuses(data.cameras)
-      const allDone = data.cameras.every((c) => c.status === 'done' || c.status === 'error')
-      if (allDone) {
-        clearInterval(interval)
-        onAllDone()
+    let timeoutId = null
+
+    // self-rescheduling instead of setInterval: the next poll is only
+    // queued after the previous one finishes (success or failure), so a
+    // slow response can't overlap with the next tick and race it.
+    async function poll() {
+      try {
+        const data = await getBatchStatus(batchId)
+        if (cancelled) return
+        setStatuses(data.cameras)
+        setPollError(null)
+        const allDone = data.cameras.every((c) => c.status === 'done' || c.status === 'error')
+        if (allDone) {
+          onAllDone()
+          return
+        }
+      } catch (err) {
+        if (cancelled) return
+        setPollError(err.message)
       }
-    }, 2000)
+      if (!cancelled) timeoutId = setTimeout(poll, 2000)
+    }
+
+    timeoutId = setTimeout(poll, 2000)
     return () => {
       cancelled = true
-      clearInterval(interval)
+      clearTimeout(timeoutId)
     }
   }, [batchId, onAllDone])
 
@@ -28,6 +43,9 @@ export default function ProgressPage({ batchId, cameras, onAllDone }) {
       <div className="panel">
         <h2>카메라별 처리 현황</h2>
         <p className="hint">새 카메라는 슬롯 탐지 후 라벨링, 기존 카메라는 바로 라벨링됩니다.</p>
+        {pollError && (
+          <p className="error-text">상태 확인 중 오류: {pollError} (계속 재시도 중)</p>
+        )}
         {statuses.map((c) => (
           <div className="status-line" key={c.camera_id}>
             <span>{c.camera_id} <span style={{ color: 'var(--text-muted)' }}>({c.photo_count}장)</span></span>

@@ -26,6 +26,25 @@ def test_submit_camera_job_labels_photos_for_known_camera(tmp_path, monkeypatch)
     assert labeled_file.is_file()
 
 
+def test_submit_camera_job_skips_corrupt_photo_and_still_finishes(tmp_path, monkeypatch):
+    # a real folder drag-in can contain a broken/renamed non-image .jpg --
+    # it must be skipped, not fail the whole camera job.
+    monkeypatch.setattr(storage, "WEB_UPLOADS_DIR", tmp_path)
+
+    upload_dir = storage.camera_upload_dir("batchC", SAMPLE_CAMERA)
+    upload_dir.mkdir(parents=True)
+    shutil.copy(SAMPLE_PHOTO, upload_dir / SAMPLE_PHOTO.name)
+    (upload_dir / "broken.jpg").write_bytes(b"this is not a jpeg")
+
+    job_id = jobs.submit_camera_job("batchC", SAMPLE_CAMERA, upload_dir, photo_count=2)
+    status = jobs.wait_for_job(job_id, timeout=30)
+
+    assert status["status"] == "done"
+    assert "broken.jpg" in (status["error"] or "")
+    assert (storage.labeled_dir("batchC", SAMPLE_CAMERA) / f"{SAMPLE_PHOTO.stem}.png").is_file()
+    assert not (storage.labeled_dir("batchC", SAMPLE_CAMERA) / "broken.png").exists()
+
+
 def test_submit_camera_job_uses_yolo_model_when_checkpoint_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "WEB_UPLOADS_DIR", tmp_path / "web_uploads")
     # config_path in jobs._process_camera is built from storage.PROJECT_ROOT

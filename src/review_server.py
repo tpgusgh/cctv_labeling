@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -20,10 +21,13 @@ def _render_page(candidate):
 {flag_note}
 <h1>후보 리뷰</h1>
 <p>카메라: {candidate['camera_id']} | 신뢰도: {candidate['confidence']}</p>
-<img src="/crops/{candidate['id']}.png" style="max-width:480px;border:1px solid #333">
+<img src="/frame/{candidate['camera_id']}.png?highlight={candidate['id']}"
+     style="max-width:640px;border:1px solid #333">
+<p>확대 (빨간 테두리 = 위 사진의 빨간 박스와 같은 후보):
+<img src="/crops/{candidate['id']}.png" style="max-width:320px;border:2px solid #ff0000;vertical-align:middle;image-rendering:pixelated"></p>
 <p>
-<button onclick="decide('accept')">승인 (진짜 슬롯)</button>
-<button onclick="decide('reject')">거부 (슬롯 아님)</button>
+<button onclick="decide('accept')">승인 (진짜 슬롯) <kbd>a</kbd></button>
+<button onclick="decide('reject')">거부 (슬롯 아님) <kbd>r</kbd></button>
 </p>
 <script>
 function decide(decision) {{
@@ -33,6 +37,10 @@ function decide(decision) {{
     body: JSON.stringify({{id: '{candidate["id"]}', decision: decision}})
   }}).then(() => location.reload());
 }}
+document.addEventListener('keydown', (e) => {{
+  if (e.key === 'a' || e.key === 'A') decide('accept');
+  else if (e.key === 'r' || e.key === 'R') decide('reject');
+}});
 </script>"""
     return f"<html><body>{body}<p><a href=\"/history\">리뷰 기록 보기</a> | <a href=\"/missed\">미탐 슬롯 표시</a></p></body></html>"
 
@@ -87,7 +95,32 @@ def _reference_image_path(camera_id, candidates):
     return match["image_path"] if match else None
 
 
-def _render_missed_page(camera_id, cameras, missed_count):
+def _cameras_with_reference_image(candidates):
+    """Cameras to offer for missed-slot annotation -- skips any camera whose
+    reference image no longer exists on disk (e.g. an old web-upload session
+    dir, or a worktree that was since removed), so a dead candidate record
+    doesn't show up as a phantom camera with nothing to draw on."""
+    cameras = []
+    for camera_id in _camera_ids(candidates):
+        cam_candidates = [c for c in candidates if c["camera_id"] == camera_id]
+        image_path = _reference_image_path(camera_id, cam_candidates)
+        if image_path and os.path.isfile(image_path):
+            cameras.append(camera_id)
+    return cameras
+
+
+def _candidate_style(is_highlighted, decision):
+    """Color/thickness for one candidate's outline on the full reference
+    frame -- the candidate currently under review stands out from the rest
+    so it's identifiable at a glance instead of only in an isolated crop."""
+    if is_highlighted:
+        return (0, 0, 255), 8
+    if decision == "reject":
+        return (150, 150, 150), 2
+    return (255, 200, 0), 2
+
+
+def _render_missed_page(camera_id, cameras, missed_count, native_width, native_height):
     if camera_id is None:
         return "<html><body><h1>후보 없음 -- 먼저 카메라 생성/리뷰부터</h1></body></html>"
 
@@ -116,6 +149,8 @@ def _render_missed_page(camera_id, cameras, missed_count):
 <script>
 const canvas = document.getElementById('draw');
 const ctx = canvas.getContext('2d');
+const scaleX = {native_width} / {FRAME_SIZE};
+const scaleY = {native_height} / {FRAME_SIZE};
 let points = [];
 
 function redraw() {{
@@ -141,7 +176,7 @@ canvas.addEventListener('click', (e) => {{
   redraw();
   if (points.length < 4) return;
 
-  const polygon = points;
+  const polygon = points.map(([x, y]) => [x * scaleX, y * scaleY]);
   points = [];
   fetch('/missed/save', {{
     method: 'POST',
@@ -173,7 +208,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._serve_crop(self.path[len("/crops/"):])
             return
         if parsed.path.startswith("/frame/") and parsed.path.endswith(".png"):
-            self._serve_frame(parsed.path[len("/frame/"):-len(".png")])
+            highlight_id = parse_qs(parsed.query).get("highlight", [None])[0]
+            self._serve_frame(parsed.path[len("/frame/"):-len(".png")], highlight_id)
             return
         if parsed.path == "/":
             candidates = review_store.load_candidates()
@@ -190,15 +226,24 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _serve_missed_page(self, query):
         candidates = review_store.load_candidates()
-        cameras = _camera_ids(candidates)
+        cameras = _cameras_with_reference_image(candidates)
         camera_id = query.get("camera", [None])[0] or (cameras[0] if cameras else None)
         if camera_id not in cameras:
             self.send_error(404, "unknown camera")
             return
-        missed = [m for m in review_store.load_missed_annotations() if m["camera_id"] == camera_id]
-        self._send_html(_render_missed_page(camera_id, cameras, len(missed)))
 
-    def _serve_frame(self, camera_id):
+        cam_candidates = [c for c in candidates if c["camera_id"] == camera_id]
+        image_path = _reference_image_path(camera_id, cam_candidates)
+        image = cv2.imread(image_path) if image_path else None
+        if image is None:
+            self.send_error(404, "reference image missing for this camera")
+            return
+        native_height, native_width = image.shape[:2]
+
+        missed = [m for m in review_store.load_missed_annotations() if m["camera_id"] == camera_id]
+        self._send_html(_render_missed_page(camera_id, cameras, len(missed), native_width, native_height))
+
+    def _serve_frame(self, camera_id, highlight_id=None):
         candidates = [c for c in review_store.load_candidates() if c["camera_id"] == camera_id]
         image_path = _reference_image_path(camera_id, candidates)
         if image_path is None:
@@ -212,8 +257,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
         decisions = {label["id"]: label["decision"] for label in review_store.load_labels()}
         for c in candidates:
             pts = [[int(x), int(y)] for x, y in c["polygon"]]
-            color = (150, 150, 150) if decisions.get(c["id"]) == "reject" else (255, 200, 0)
-            cv2.polylines(image, [np.array(pts)], True, color, 2)
+            color, thickness = _candidate_style(c["id"] == highlight_id, decisions.get(c["id"]))
+            cv2.polylines(image, [np.array(pts)], True, color, thickness)
         missed = [m for m in review_store.load_missed_annotations() if m["camera_id"] == camera_id]
         for m in missed:
             pts = [[int(x), int(y)] for x, y in m["polygon"]]
@@ -334,13 +379,16 @@ class ReviewHandler(BaseHTTPRequestHandler):
 def build_parser():
     parser = argparse.ArgumentParser(description="Local review UI for slot detection candidates.")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--host", default="127.0.0.1",
+                         help="bind address (default: loopback only -- this UI has no auth, "
+                              "pass 0.0.0.0 only if you deliberately want it reachable over the network)")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    server = HTTPServer(("", args.port), ReviewHandler)
-    print(f"review server on http://localhost:{args.port}")
+    server = HTTPServer((args.host, args.port), ReviewHandler)
+    print(f"review server on http://{args.host}:{args.port}")
     server.serve_forever()
 
 

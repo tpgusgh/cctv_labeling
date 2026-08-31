@@ -144,12 +144,13 @@ config 안 모든 슬롯 한번에:
 성공은 `output-dir`, 슬롯 중 하나라도 review/error면 `review-dir`로 감.
 `log.json`에 이미지별 상태 전부 기록.
 
-## 7. YOLOv8-seg 학습 (선택, 딥러닝 파이프라인)
+## 7. YOLOv8-seg 학습 (딥러닝 파이프라인)
 
 리뷰에서 쌓인 승인/미탐 라벨(`review/labels.jsonl` accept + `review/missed.jsonl`)로
-YOLOv8-seg 모델을 파인튜닝하는 별도 경로. **아직 opt-in** — 웹앱
-(`web/backend/jobs.py`)과 1번의 기본 동작은 이 모델을 안 쓰고 여전히
-classical CV(Hough+연결영역)만 씀.
+YOLOv8-seg 모델을 파인튜닝하는 경로. 웹앱(`web/backend/jobs.py`)은
+`models/yolov8_seg_slots_v6.pt`가 존재하면 자동으로 로드해서 classical
+CV(Hough+연결영역)와 **앙상블**로 탐지함 (없으면 classical CV만). 두 탐지기가
+독립적으로 같은 위치를 잡으면(`agreement_count >= 2`) 자동 승인됨.
 
 ### 7-1. 데이터셋 export
 
@@ -185,6 +186,15 @@ classical CV(Hough+연결영역)만 씀.
   --yolo-model models/yolov8_seg_slots.pt
 ```
 
-`--yolo-model` 주면 classical CV 대신 이 모델로 탐지. `--model`(분류기)과
-같이 주면 `--yolo-model`이 우선. 아직 웹앱에는 안 이어져 있음 — CLI에서만
-가능.
+`--yolo-model` 주면 이 모델 + classical CV 앙상블로 탐지 (중복은 IoU/중심점
+기준으로 합쳐지고 신뢰도 높은 쪽이 남음). `--auto-accept-agreement` 주면
+두 탐지기가 동시에 잡은 후보는 리뷰 없이 자동 승인.
+
+### 7-4. 거부 이력 자동 억제
+
+사람이 거부한 위치는 `generate_config`가 기억함: 같은 카메라에서 리뷰
+로그(`review/labels.jsonl`)에 거부로 기록된 지역과 겹치는 탐지는 config에
+안 들어감 (같은 지역에 승인 기록도 있으면 — 중복 정리 케이스 — 살아남음).
+웹에서 Shift+× 로 슬롯을 삭제해도 같은 거부 기록이 쌓여서, 재탐지 때 그
+위치가 되살아나지 않음. 반대로 웹에서 직접 그린 슬롯은 승인으로 기록되어
+억제로부터 보호되고 다음 재학습의 정답 데이터가 됨.

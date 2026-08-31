@@ -36,3 +36,13 @@ models/*.joblib
 /review
 /models
 /.venv
+/origin_no_label
+/origin_no_label2
+/label2
+/datasets
+/config
+/test1
+/test2
+
+# macOS
+.DS_Store

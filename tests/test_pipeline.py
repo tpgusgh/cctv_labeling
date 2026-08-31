@@ -2,9 +2,53 @@ import cv2
 import numpy as np
 import pytest
 
+from types import SimpleNamespace
+
 from calibration import CalibrationModel
 from parking_slot import SlotConfig
-from pipeline import run, run_auto, run_auto_all
+import pipeline as pipeline_module
+from pipeline import _canonicalize_quad_start, run, run_auto, run_auto_all
+
+
+def test_overlapping_label_slots_drops_lower_confidence_overlap():
+    # two slots whose label quads overlap: lower-confidence one must be
+    # dropped ("라벨이 겹치는건 무조건 빼줘") -- containment counts too.
+    quads = {
+        "slot-a": [[0, 0], [40, 0], [40, 90], [0, 90]],
+        "slot-b": [[10, 10], [30, 10], [30, 60], [10, 60]],   # inside slot-a
+        "slot-c": [[200, 200], [240, 200], [240, 290], [200, 290]],  # far away
+    }
+    config = SimpleNamespace(
+        slots=[{"id": "slot-a", "confidence": 0.9},
+               {"id": "slot-b", "confidence": 0.5},
+               {"id": "slot-c", "confidence": 0.4}],
+        label_spec={},
+    )
+    import pipeline as pm
+    orig = pm.label_box_raw_pixels
+    pm.label_box_raw_pixels = lambda cfg, slot, sid, adj: quads[sid]
+    try:
+        dropped = pm._overlapping_label_slots(config, config.slots, {})
+    finally:
+        pm.label_box_raw_pixels = orig
+    assert dropped == {"slot-b"}
+
+
+def test_label_box_plane_precedence_slot_default_between_override_and_fixed():
+    config = SimpleNamespace(
+        slots=[{"id": "slot-0", "label_box": {"cx": 0.4, "cy": 0.45, "w": 0.5, "h": 0.3}}],
+        label_spec={},
+    )
+    # per-photo override wins over the slot default
+    assert pipeline_module._label_box_plane(
+        config, {"slot-0": {"cx": 0.1, "cy": 0.2, "w": 0.3, "h": 0.4}}, "slot-0") == (0.1, 0.2, 0.3, 0.4)
+    # no override -> the slot's own saved default (web shift-adjust)
+    assert pipeline_module._label_box_plane(config, {}, "slot-0") == (0.4, 0.45, 0.5, 0.3)
+    # a slot without a saved default falls back to the fixed constants
+    config.slots[0].pop("label_box")
+    cx, cy, w, h = pipeline_module._label_box_plane(config, {}, "slot-0")
+    assert (cx, cy) == pipeline_module.FIXED_CANDIDATE_POINT
+    assert (w, h) == (pipeline_module.FIXED_LABEL_WIDTH, pipeline_module.FIXED_LABEL_HEIGHT)
 
 SAMPLE_RAW_IMAGE = "no_label/P1_B1_1_1/20260820_030004.jpg"
 
@@ -22,6 +66,21 @@ def _write_test_config(tmp_path, polygon_raw=None):
     path = tmp_path / "P1_B1_1_1.json"
     config.save(str(path))
     return str(path)
+
+
+def test_canonicalize_quad_start_rotates_to_shortest_edge_first():
+    # a wide-short rectangle whose corner order happens to start on the
+    # long (depth) edge instead of the short (width/entrance) edge --
+    # fit_quad() gives no guarantee either way.
+    quad = np.array([[0.0, 0.0], [0.0, 100.0], [40.0, 100.0], [40.0, 0.0]])
+    canonical = _canonicalize_quad_start(quad)
+    assert np.linalg.norm(canonical[1] - canonical[0]) < np.linalg.norm(canonical[2] - canonical[1])
+
+
+def test_canonicalize_quad_start_is_a_noop_when_already_shortest_first():
+    quad = np.array([[0.0, 0.0], [40.0, 0.0], [40.0, 100.0], [0.0, 100.0]])
+    canonical = _canonicalize_quad_start(quad)
+    np.testing.assert_array_equal(canonical, quad)
 
 
 def test_pipeline_composites_label_near_periphery_without_corrupting_far_pixels(tmp_path):
